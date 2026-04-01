@@ -1,0 +1,39 @@
+{
+  "entities": {
+    "Fakemon": {
+      "title": "Fakemon",
+      "description": "A single stage or variant of a Fakemon in the Pokédex.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Name of the Fakemon" },
+        "classification": { "type": "string", "description": "Classification (e.g., Fakemon Fox)" },
+        "typing": { "type": "string", "description": "Types (e.g., Fire / Ghost)" },
+        "lore": { "type": "string", "description": "Pokédex entry text" },
+        "imageUrl": { "type": "string", "description": "URL to the generated image" },
+        "stats": {
+          "type": "object",
+          "properties": {
+            "hp": { "type": "number" },
+            "attack": { "type": "number" },
+            "defense": { "type": "number" },
+            "spAtk": { "type": "number" },
+            "spDef": { "type": "number" },
+            "speed": { "type": "number" }
+          }
+        },
+        "pokedexNumber": { "type": "number", "description": "Sequential number in the Pokédex" },
+        "isShiny": { "type": "boolean", "description": "Whether this is a shiny variant" },
+        "isMega": { "type": "boolean", "description": "Whether this is a mega evolution" },
+        "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
+        "userEmail": { "type": "string", "description": "Email of the creator" }
+      },
+      "required": ["name", "classification", "typing", "lore", "imageUrl", "stats", "pokedexNumber", "isShiny", "isMega", "createdAt", "userEmail"]
+    }
+  },
+  "firestore": {
+    "/fakemons": {
+      "schema": "Fakemon",
+      "description": "Collection of all created Fakemon."
+    }
+  }
+}

@@ -1,0 +1,66 @@
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: fakemons
+    // Document ID: random
+    // Fields:
+    //   - name: string (required)
+    //   - classification: string (required)
+    //   - typing: string (required)
+    //   - lore: string (required)
+    //   - imageUrl: string (required)
+    //   - stats: map (required)
+    //   - pokedexNumber: number (required)
+    //   - isShiny: boolean (required)
+    //   - isMega: boolean (required)
+    //   - createdAt: timestamp (required)
+    //   - userEmail: string (required)
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isAuthenticated() &&
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin') ||
+          (request.auth.token.email == "alvinhuu182@gmail.com" && request.auth.token.email_verified == true));
+    }
+
+    function isValidFakemon(data) {
+      return data.keys().hasAll(['name', 'classification', 'typing', 'lore', 'imageUrl', 'stats', 'pokedexNumber', 'isShiny', 'isMega', 'createdAt', 'userEmail', 'userId']) &&
+             data.name is string && data.name.size() < 100 &&
+             data.classification is string && data.classification.size() < 100 &&
+             data.typing is string && data.typing.size() < 100 &&
+             data.lore is string && data.lore.size() < 5000 &&
+             data.imageUrl is string && data.imageUrl.size() < 1000000 &&
+             data.stats is map &&
+             data.pokedexNumber is number &&
+             data.isShiny is bool &&
+             data.isMega is bool &&
+             data.createdAt is timestamp &&
+             data.userEmail is string &&
+             data.userId is string;
+    }
+
+    match /fakemons/{fakemonId} {
+      allow read: if isAuthenticated();
+      allow create: if isAuthenticated() && isValidFakemon(request.resource.data);
+      allow update: if isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.userId || request.auth.token.email == resource.data.userEmail));
+      allow delete: if isAdmin() || (isAuthenticated() && (request.auth.uid == resource.data.userId || request.auth.token.email == resource.data.userEmail));
+    }
+
+    match /users/{userId} {
+      allow read: if isAuthenticated() && (request.auth.uid == userId || isAdmin());
+      allow create, update: if isAuthenticated() && request.auth.uid == userId && (request.resource.data.role == 'user' || isAdmin());
+    }
+  }
+}
