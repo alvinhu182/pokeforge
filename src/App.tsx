@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import { GoogleGenAI, Type } from "@google/genai";
-import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2 } from "lucide-react";
+import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "motion/react";
 
@@ -107,10 +107,10 @@ interface SavedFakemon extends FakemonStage {
   userId: string;
 }
 
-const CATEGORIES = ["Comum", "Raro", "Pseudo-Lendário", "Lendário", "Mítico", "Fóssil", "Ultra Beast"];
+const CATEGORIES = ["Comum", "Raro", "Pseudo-Lendário", "Lendário", "Mítico", "Fóssil", "Ultra Beast", "Aleatório"];
 const TYPES = [
   "Normal", "Fogo", "Água", "Grama", "Elétrico", "Gelo", "Lutador", "Veneno", "Terra", 
-  "Voador", "Psíquico", "Inseto", "Pedra", "Fantasma", "Dragão", "Sombrio", "Aço", "Fada", "Cósmico"
+  "Voador", "Psíquico", "Inseto", "Pedra", "Fantasma", "Dragão", "Sombrio", "Aço", "Fada", "Cósmico", "Aleatório"
 ];
 const CHARACTERISTICS = [
   { id: "none", label: "Nenhuma", icon: Globe },
@@ -118,6 +118,7 @@ const CHARACTERISTICS = [
   { id: "regional", label: "Forma Regional", icon: Globe },
   { id: "corrupted", label: "Corrompido", icon: Skull },
   { id: "shiny", label: "Variante Brilhante", icon: Star },
+  { id: "random", label: "Aleatório", icon: HelpCircle },
 ];
 
 const TYPE_COLORS: Record<string, string> = {
@@ -179,6 +180,13 @@ export default function App() {
   const [pokedex, setPokedex] = useState<SavedFakemon[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [randomizing, setRandomizing] = useState<null | {
+    category?: string;
+    evolutions?: number;
+    type1?: string;
+    type2?: string;
+    characteristic?: string;
+  }>(null);
 
   const getTypeColor = (type: string) => {
     const t = type.trim();
@@ -354,16 +362,58 @@ export default function App() {
     try {
       const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
       
+      // Handle Randomization
+      let finalCategory = category;
+      let finalEvolutions = evolutions;
+      let finalType1 = type1;
+      let finalType2 = type2;
+      let finalCharacteristic = characteristic;
+
+      const needsRandom = category === "Aleatório" || evolutions === 0 || type1 === "Aleatório" || type2 === "Aleatório" || characteristic === "random";
+
+      if (needsRandom) {
+        if (category === "Aleatório") {
+          const cats = CATEGORIES.filter(c => c !== "Aleatório");
+          finalCategory = cats[Math.floor(Math.random() * cats.length)];
+        }
+        if (evolutions === 0) {
+          finalEvolutions = Math.floor(Math.random() * 3) + 1;
+        }
+        if (type1 === "Aleatório") {
+          const ts = TYPES.filter(t => t !== "Aleatório");
+          finalType1 = ts[Math.floor(Math.random() * ts.length)];
+        }
+        if (type2 === "Aleatório") {
+          const ts = ["Nenhum", ...TYPES.filter(t => t !== "Aleatório")];
+          finalType2 = ts[Math.floor(Math.random() * ts.length)];
+        }
+        if (characteristic === "random") {
+          const chars = CHARACTERISTICS.filter(c => c.id !== "random");
+          finalCharacteristic = chars[Math.floor(Math.random() * chars.length)].id;
+        }
+
+        setRandomizing({
+          category: category === "Aleatório" ? finalCategory : undefined,
+          evolutions: evolutions === 0 ? finalEvolutions : undefined,
+          type1: type1 === "Aleatório" ? finalType1 : undefined,
+          type2: type2 === "Aleatório" ? finalType2 : undefined,
+          characteristic: characteristic === "random" ? CHARACTERISTICS.find(c => c.id === finalCharacteristic)?.label : undefined,
+        });
+
+        await new Promise(resolve => setTimeout(resolve, 6000));
+        setRandomizing(null);
+      }
+
       // 1. Generate Text Content for all stages
-      const isMega = characteristic === "mega";
-      const isShiny = characteristic === "shiny";
-      const totalStages = isMega ? evolutions + 1 : evolutions;
+      const isMega = finalCharacteristic === "mega";
+      const isShiny = finalCharacteristic === "shiny";
+      const totalStages = isMega ? finalEvolutions + 1 : finalEvolutions;
 
       const textPrompt = `
         Você é um Especialista em Game Design e Artista Conceitual da franquia Fakemon.
         Crie uma linha evolutiva de Fakemon com base nestes parâmetros:
         - Conceito: ${concept || "Um Fakemon criativo, original e visualmente impactante"}
-        - Categoria (Raridade/Poder): ${category}
+        - Categoria (Raridade/Poder): ${finalCategory}
           (Contexto de Categoria: 
           "Comum": Fakemon de rota inicial, poder moderado.
           "Raro": Fakemon com habilidades únicas, poder acima da média.
@@ -372,11 +422,11 @@ export default function App() {
           "Mítico": Fakemon extremamente raro e misterioso.
           "Fóssil": Fakemon pré-histórico ressuscitado.
           "Ultra Beast": Fakemon de outra dimensão com design bizarro e alienígena.)
-        - Tipagem: ${type1}${type2 !== "Nenhum" ? ` / ${type2}` : ""}
-        - Quantidade de estágios base: ${evolutions}
+        - Tipagem: ${finalType1}${finalType2 !== "Nenhum" ? ` / ${finalType2}` : ""}
+        - Quantidade de estágios base: ${finalEvolutions}
         - Mega Evolução inclusa: ${isMega ? "Sim" : "Não"}
         - Variante Brilhante (Shiny) inclusa: ${isShiny ? "Sim" : "Não"}
-        - Característica Especial: ${characteristic}
+        - Característica Especial: ${finalCharacteristic}
 
         Você deve gerar exatamente ${totalStages} Fakemon na linha evolutiva.
         ${isMega ? `O ÚLTIMO estágio (estágio ${totalStages}) DEVE ser a Mega Evolução do estágio anterior. O nome deve ser "Mega [Nome do Fakemon]".` : ""}
@@ -652,13 +702,14 @@ export default function App() {
                 <div className="space-y-2">
                   <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Evoluções</label>
                   <div className="flex border-2 border-black overflow-hidden">
-                    {[1, 2, 3].map(num => (
+                    {[0, 1, 2, 3].map(num => (
                       <button
                         key={num}
                         onClick={() => setEvolutions(num)}
                         className={`flex-1 p-3 font-bold transition-colors ${evolutions === num ? 'bg-black text-[#00FF00]' : 'bg-[#F0F0F0] hover:bg-[#E0E0E0]'}`}
+                        title={num === 0 ? "Aleatório" : `${num} Estágio(s)`}
                       >
-                        {num}
+                        {num === 0 ? <HelpCircle className="w-4 h-4 mx-auto" /> : num}
                       </button>
                     ))}
                   </div>
@@ -1120,6 +1171,71 @@ export default function App() {
             )}
           </section>
         )}
+
+        {/* Randomization Overlay */}
+        <AnimatePresence>
+          {randomizing && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/90 backdrop-blur-md"
+            >
+              <div className="max-w-2xl w-full space-y-8 text-center">
+                <motion.div
+                  initial={{ scale: 0.5, rotate: -10 }}
+                  animate={{ scale: 1, rotate: 0 }}
+                  className="inline-block bg-[#00FF00] text-black px-6 py-2 font-black uppercase italic text-xl border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]"
+                >
+                  Sorteando Parâmetros...
+                </motion.div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {Object.entries(randomizing).map(([key, value], idx) => value && (
+                    <motion.div
+                      key={key}
+                      initial={{ x: -20, opacity: 0 }}
+                      animate={{ x: 0, opacity: 1 }}
+                      transition={{ delay: idx * 0.2 }}
+                      className="bg-white/5 border-2 border-white/10 p-6 space-y-2"
+                    >
+                      <p className="text-[10px] font-black uppercase tracking-[0.3em] text-[#00FF00]">
+                        {key === 'category' ? 'Categoria' : 
+                         key === 'evolutions' ? 'Evoluções' : 
+                         key === 'type1' ? 'Tipo Primário' : 
+                         key === 'type2' ? 'Tipo Secundário' : 'Característica'}
+                      </p>
+                      <motion.p 
+                        initial={{ scale: 1.5, color: "#00FF00" }}
+                        animate={{ scale: 1, color: "#FFFFFF" }}
+                        className="text-2xl font-black uppercase italic"
+                      >
+                        {value}
+                      </motion.p>
+                    </motion.div>
+                  ))}
+                </div>
+
+                <motion.div
+                  animate={{ opacity: [0.3, 1, 0.3] }}
+                  transition={{ repeat: Infinity, duration: 1.5 }}
+                  className="text-[10px] font-black uppercase tracking-[0.5em] text-white/40"
+                >
+                  Iniciando Forja em Instantes...
+                </motion.div>
+
+                <div className="w-full max-w-md mx-auto h-1 bg-white/10 overflow-hidden">
+                  <motion.div 
+                    initial={{ width: 0 }}
+                    animate={{ width: "100%" }}
+                    transition={{ duration: 6, ease: "linear" }}
+                    className="h-full bg-[#00FF00]"
+                  />
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </main>
 
       {/* Footer / Status Bar */}
