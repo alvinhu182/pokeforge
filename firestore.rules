@@ -36,7 +36,7 @@ service cloud.firestore {
     }
 
     function isValidFakemon(data) {
-      return data.keys().hasAll(['name', 'classification', 'typing', 'lore', 'imageUrl', 'stats', 'pokedexNumber', 'isShiny', 'isMega', 'createdAt', 'userEmail', 'userId']) &&
+      return data.keys().hasAll(['name', 'classification', 'typing', 'lore', 'imageUrl', 'stats', 'pokedexNumber', 'isShiny', 'isMega', 'createdAt', 'userEmail', 'userId', 'suggestedBy']) &&
              data.name is string && data.name.size() < 100 &&
              data.classification is string && data.classification.size() < 100 &&
              data.typing is string && data.typing.size() < 100 &&
@@ -48,7 +48,8 @@ service cloud.firestore {
              data.isMega is bool &&
              data.createdAt is timestamp &&
              data.userEmail is string &&
-             data.userId is string;
+             data.userId is string &&
+             data.suggestedBy is string && data.suggestedBy.size() < 100;
     }
 
     match /fakemons/{fakemonId} {

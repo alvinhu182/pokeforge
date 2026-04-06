@@ -25,9 +25,11 @@
         "isShiny": { "type": "boolean", "description": "Whether this is a shiny variant" },
         "isMega": { "type": "boolean", "description": "Whether this is a mega evolution" },
         "createdAt": { "type": "string", "format": "date-time", "description": "Creation timestamp" },
-        "userEmail": { "type": "string", "description": "Email of the creator" }
+        "userEmail": { "type": "string", "description": "Email of the creator" },
+        "userId": { "type": "string", "description": "UID of the creator" },
+        "suggestedBy": { "type": "string", "description": "Name of the person who suggested the concept" }
       },
-      "required": ["name", "classification", "typing", "lore", "imageUrl", "stats", "pokedexNumber", "isShiny", "isMega", "createdAt", "userEmail"]
+      "required": ["name", "classification", "typing", "lore", "imageUrl", "stats", "pokedexNumber", "isShiny", "isMega", "createdAt", "userEmail", "userId", "suggestedBy"]
     }
   },
   "firestore": {

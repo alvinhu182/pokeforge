@@ -5,9 +5,10 @@
 
 import React, { useState, useEffect } from "react";
 import { GoogleGenAI, Type } from "@google/genai";
-import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle } from "lucide-react";
+import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle, Download } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "motion/react";
+import { toPng } from "html-to-image";
 
 // --- Firebase ---
 import { initializeApp } from "firebase/app";
@@ -82,6 +83,7 @@ interface FakemonStage {
   imageUrl?: string;
   shinyImageUrl?: string;
   pokedexNumber?: number;
+  suggestedBy?: string;
   stats: {
     hp: number;
     attack: number;
@@ -169,6 +171,7 @@ export default function App() {
   const [view, setView] = useState<"forge" | "pokedex">("forge");
   const [user, setUser] = useState<User | null>(null);
   const [concept, setConcept] = useState("");
+  const [suggestedBy, setSuggestedBy] = useState("");
   const [category, setCategory] = useState("Comum");
   const [type1, setType1] = useState("Normal");
   const [type2, setType2] = useState("Nenhum");
@@ -180,6 +183,7 @@ export default function App() {
   const [pokedex, setPokedex] = useState<SavedFakemon[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [downloadingId, setDownloadingId] = useState<string | null>(null);
   const [randomizing, setRandomizing] = useState<null | {
     category?: string;
     evolutions?: number;
@@ -327,6 +331,129 @@ export default function App() {
       }, 500);
     } catch (err) {
       handleFirestoreError(err, OperationType.DELETE, `${path}/${id}`);
+    }
+  };
+
+  const handleDownloadCard = async (fakemon: SavedFakemon) => {
+    setDownloadingId(fakemon.id);
+    try {
+      // Create a temporary container for the card
+      const container = document.createElement('div');
+      container.style.position = 'fixed';
+      container.style.left = '-9999px';
+      container.style.top = '0';
+      document.body.appendChild(container);
+
+      // Render the Super Trunfo card into the container
+      const cardHtml = `
+        <div id="super-trunfo-card" style="
+          width: 400px;
+          background: white;
+          border: 12px solid black;
+          padding: 20px;
+          font-family: 'Inter', sans-serif;
+          display: flex;
+          flex-direction: column;
+          gap: 20px;
+          box-shadow: 20px 20px 0px 0px rgba(0,0,0,1);
+        ">
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 4px solid black; padding-bottom: 10px;">
+            <h1 style="margin: 0; font-size: 32px; font-weight: 900; text-transform: uppercase; font-style: italic; letter-spacing: -2px;">${fakemon.name}</h1>
+            <span style="font-weight: 900; font-size: 14px; background: black; color: white; padding: 4px 8px;">#${String(fakemon.pokedexNumber).padStart(3, '0')}</span>
+          </div>
+          
+          <div style="aspect-ratio: 1/1; border: 4px solid black; background: #f8f8f8; overflow: hidden; display: flex; align-items: center; justify-content: center;">
+            <img src="${fakemon.imageUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 20px;" />
+          </div>
+
+          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+            ${fakemon.typing.split('/').map(t => `
+              <span style="
+                background: ${getTypeColor(t)};
+                color: white;
+                padding: 4px 12px;
+                font-size: 12px;
+                font-weight: 900;
+                text-transform: uppercase;
+                border: 2px solid black;
+                box-shadow: 2px 2px 0px 0px rgba(0,0,0,1);
+              ">${t.trim()}</span>
+            `).join('')}
+          </div>
+
+          <div style="background: black; padding: 20px; border: 4px solid black; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">HP</span>
+              <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="height: 100%; width: ${Math.min(100, (fakemon.stats.hp / 255) * 100)}%; background: #FF4B4B;"></div>
+                <span style="position: absolute; right: 4px; top: -14px; color: white; font-size: 10px; font-weight: 900;">${fakemon.stats.hp}</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">ATK</span>
+              <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="height: 100%; width: ${Math.min(100, (fakemon.stats.attack / 255) * 100)}%; background: #FF9F4B;"></div>
+                <span style="position: absolute; right: 4px; top: -14px; color: white; font-size: 10px; font-weight: 900;">${fakemon.stats.attack}</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">DEF</span>
+              <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="height: 100%; width: ${Math.min(100, (fakemon.stats.defense / 255) * 100)}%; background: #FFD94B;"></div>
+                <span style="position: absolute; right: 4px; top: -14px; color: white; font-size: 10px; font-weight: 900;">${fakemon.stats.defense}</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">S.ATK</span>
+              <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="height: 100%; width: ${Math.min(100, (fakemon.stats.spAtk / 255) * 100)}%; background: #4B7BFF;"></div>
+                <span style="position: absolute; right: 4px; top: -14px; color: white; font-size: 10px; font-weight: 900;">${fakemon.stats.spAtk}</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">S.DEF</span>
+              <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="height: 100%; width: ${Math.min(100, (fakemon.stats.spDef / 255) * 100)}%; background: #4BFF7B;"></div>
+                <span style="position: absolute; right: 4px; top: -14px; color: white; font-size: 10px; font-weight: 900;">${fakemon.stats.spDef}</span>
+              </div>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;">
+              <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">SPD</span>
+              <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
+                <div style="height: 100%; width: ${Math.min(100, (fakemon.stats.speed / 255) * 100)}%; background: #FF4BFF;"></div>
+                <span style="position: absolute; right: 4px; top: -14px; color: white; font-size: 10px; font-weight: 900;">${fakemon.stats.speed}</span>
+              </div>
+            </div>
+          </div>
+
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-top: auto;">
+            <span style="font-size: 8px; font-weight: 900; text-transform: uppercase; color: rgba(0,0,0,0.3);">PokéForge AI // Regional Card</span>
+            ${fakemon.suggestedBy ? `<span style="font-size: 8px; font-weight: 900; text-transform: uppercase; color: rgba(0,0,0,0.6);">Sugestão: ${fakemon.suggestedBy}</span>` : ''}
+          </div>
+        </div>
+      `;
+      
+      container.innerHTML = cardHtml;
+      
+      // Wait a bit for images to be ready
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      const dataUrl = await toPng(container.querySelector('#super-trunfo-card') as HTMLElement, {
+        quality: 1,
+        pixelRatio: 2,
+      });
+      
+      const link = document.createElement('a');
+      link.download = `card-${fakemon.name.toLowerCase()}.png`;
+      link.href = dataUrl;
+      link.click();
+      
+      document.body.removeChild(container);
+    } catch (err) {
+      console.error("Error generating card:", err);
+      setError("Erro ao gerar a imagem do card.");
+    } finally {
+      setDownloadingId(null);
     }
   };
 
@@ -535,6 +662,7 @@ export default function App() {
           pokedexNumber,
           isShiny: false,
           isMega: isStageMega,
+          suggestedBy: suggestedBy.trim(),
           createdAt: new Date(),
           userEmail: user.email,
           userId: user.uid
@@ -571,6 +699,7 @@ export default function App() {
             pokedexNumber,
             isShiny: true,
             isMega: isStageMega,
+            suggestedBy: suggestedBy.trim(),
             createdAt: new Date(),
             userEmail: user.email,
             userId: user.uid
@@ -685,6 +814,19 @@ export default function App() {
                   className="w-full bg-[#F0F0F0] border-2 border-black p-4 font-medium focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all resize-none h-32"
                   value={concept}
                   onChange={(e) => setConcept(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 flex items-center gap-2">
+                  Sugerido por:
+                </label>
+                <input
+                  type="text"
+                  placeholder="Nome de quem sugeriu (opcional)"
+                  className="w-full bg-[#F0F0F0] border-2 border-black p-3 font-bold focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all"
+                  value={suggestedBy}
+                  onChange={(e) => setSuggestedBy(e.target.value)}
                 />
               </div>
 
@@ -865,6 +1007,11 @@ export default function App() {
                                   <div className="absolute top-4 right-4 bg-black text-[#00FF00] px-3 py-1 text-[10px] font-black uppercase tracking-widest border-2 border-[#00FF00]">
                                     {isStageMega ? "MEGA" : `ESTÁGIO ${index + 1}`}
                                   </div>
+                                  {suggestedBy.trim() && (
+                                    <div className="absolute bottom-4 left-4 bg-black/80 text-white px-2 py-1 text-[8px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-sm">
+                                      Sugerido por: {suggestedBy.trim()}
+                                    </div>
+                                  )}
                                 </div>
 
                                 {/* The "Black Part" - Stats Section */}
@@ -944,6 +1091,11 @@ export default function App() {
                                     <div className="absolute top-4 right-4 bg-yellow-400 text-black px-3 py-1 text-[10px] font-black uppercase tracking-widest border-2 border-black">
                                       SHINY
                                     </div>
+                                    {suggestedBy.trim() && (
+                                      <div className="absolute bottom-4 left-4 bg-black/80 text-white px-2 py-1 text-[8px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-sm">
+                                        Sugerido por: {suggestedBy.trim()}
+                                      </div>
+                                    )}
                                   </div>
 
                                   {/* The "Black Part" - Stats Section */}
@@ -1053,6 +1205,11 @@ export default function App() {
                         <Zap size={10} fill="currentColor" /> Mega
                       </div>
                     )}
+                    {fakemon.suggestedBy && (
+                      <div className="absolute bottom-4 left-4 bg-black/80 text-white px-2 py-1 text-[8px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-sm">
+                        Sugerido por: {fakemon.suggestedBy}
+                      </div>
+                    )}
                   </div>
                   
                   <div className="p-6 space-y-4">
@@ -1116,6 +1273,14 @@ export default function App() {
                         className="text-red-600 hover:bg-red-50 p-2 transition-colors"
                       >
                         <Trash2 size={14} />
+                      </button>
+                      <button 
+                        onClick={() => handleDownloadCard(fakemon)}
+                        disabled={downloadingId === fakemon.id}
+                        className="text-blue-600 hover:bg-blue-50 p-2 transition-colors disabled:opacity-50"
+                        title="Baixar Card Super Trunfo"
+                      >
+                        {downloadingId === fakemon.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                       </button>
                     </div>
                   </div>
