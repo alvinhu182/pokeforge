@@ -4,8 +4,8 @@
  */
 
 import React, { useState, useEffect } from "react";
-import { GoogleGenAI, Type } from "@google/genai";
-import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle, Download } from "lucide-react";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle, Download, Video } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "motion/react";
 import { toPng } from "html-to-image";
@@ -20,6 +20,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
 
 enum OperationType {
   CREATE = 'create',
@@ -104,6 +105,7 @@ interface SavedFakemon extends FakemonStage {
   pokedexNumber: number;
   isShiny: boolean;
   isMega: boolean;
+  rarity?: string;
   createdAt: any;
   userEmail: string;
   userId: string;
@@ -184,6 +186,7 @@ export default function App() {
   const [searchTerm, setSearchTerm] = useState("");
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+  const [generatingVideoId, setGeneratingVideoId] = useState<string | null>(null);
   const [randomizing, setRandomizing] = useState<null | {
     category?: string;
     evolutions?: number;
@@ -218,7 +221,8 @@ export default function App() {
   // --- Pokedex Sync ---
   useEffect(() => {
     if (!user) return;
-    const q = query(collection(db, "fakemons"), orderBy("pokedexNumber", "asc"), orderBy("createdAt", "desc"));
+    // Simplified query to avoid missing index errors
+    const q = query(collection(db, "fakemons"), orderBy("pokedexNumber", "asc"));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       console.log(`Pokedex updated: ${snapshot.docs.length} items found.`);
       const items = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as SavedFakemon));
@@ -250,11 +254,107 @@ export default function App() {
     return snapshot.docs[0].data().pokedexNumber + 1;
   };
 
-  const compressImage = (base64: string): Promise<string> => {
+  const removeWhiteBackground = (base64: string): Promise<string> => {
     return new Promise((resolve) => {
+      if (!base64 || !base64.startsWith('data:image')) {
+        resolve(base64);
+        return;
+      }
       const img = new Image();
       img.src = base64;
-      img.crossOrigin = "anonymous";
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(base64);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        
+        // Threshold for "white"
+        const threshold = 240;
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i+1];
+          const b = data[i+2];
+          if (r > threshold && g > threshold && b > threshold) {
+            data[i+3] = 0; // Set alpha to 0
+          }
+        }
+        ctx.putImageData(imageData, 0, 0);
+        resolve(canvas.toDataURL('image/png'));
+      };
+      img.onerror = () => resolve(base64);
+    });
+  };
+
+  const getRarityStyles = (rarity: string = "Comum") => {
+    const styles: Record<string, { border: string, glow: string, text: string, bg: string, accent: string }> = {
+      "Comum": { 
+        border: "12px solid black", 
+        glow: "20px 20px 0px 0px rgba(0,0,0,1)", 
+        text: "black", 
+        bg: "white",
+        accent: "black"
+      },
+      "Raro": { 
+        border: "12px solid #3b82f6", 
+        glow: "20px 20px 0px 0px rgba(59,130,246,0.5)", 
+        text: "#1e40af", 
+        bg: "#eff6ff",
+        accent: "#3b82f6"
+      },
+      "Pseudo-Lendário": { 
+        border: "12px solid #8b5cf6", 
+        glow: "20px 20px 0px 0px rgba(139,92,246,0.5)", 
+        text: "#5b21b6", 
+        bg: "#f5f3ff",
+        accent: "#8b5cf6"
+      },
+      "Lendário": { 
+        border: "12px solid #f59e0b", 
+        glow: "20px 20px 0px 0px rgba(245,158,11,0.5)", 
+        text: "#92400e", 
+        bg: "#fffbeb",
+        accent: "#f59e0b"
+      },
+      "Mítico": { 
+        border: "12px solid #ec4899", 
+        glow: "20px 20px 0px 0px rgba(236,72,153,0.5)", 
+        text: "#9d174d", 
+        bg: "#fdf2f8",
+        accent: "#ec4899"
+      },
+      "Fóssil": { 
+        border: "12px solid #78350f", 
+        glow: "20px 20px 0px 0px rgba(120,53,15,0.5)", 
+        text: "#451a03", 
+        bg: "#fff7ed",
+        accent: "#78350f"
+      },
+      "Ultra Beast": { 
+        border: "12px solid #10b981", 
+        glow: "20px 20px 0px 0px rgba(16,185,129,0.5)", 
+        text: "#065f46", 
+        bg: "#ecfdf5",
+        accent: "#10b981"
+      }
+    };
+    return styles[rarity] || styles["Comum"];
+  };
+
+  const compressImage = (base64: string): Promise<string> => {
+    return new Promise((resolve) => {
+      if (!base64 || !base64.startsWith('data:image')) {
+        resolve(base64);
+        return;
+      }
+      const img = new Image();
+      img.src = base64;
       img.onload = () => {
         const canvas = document.createElement("canvas");
         const MAX_WIDTH = 768;
@@ -270,12 +370,11 @@ export default function App() {
         canvas.height = height;
         const ctx = canvas.getContext("2d");
         if (ctx) {
-          ctx.fillStyle = "white";
-          ctx.fillRect(0, 0, width, height);
+          // Do NOT fill with white to preserve transparency
           ctx.drawImage(img, 0, 0, width, height);
         }
-        // Using jpeg with 0.7 quality to significantly reduce size (usually < 100KB)
-        resolve(canvas.toDataURL("image/jpeg", 0.7));
+        // Use webp to preserve transparency and reduce size
+        resolve(canvas.toDataURL("image/webp", 0.7));
       };
       img.onerror = () => resolve(base64);
     });
@@ -334,9 +433,66 @@ export default function App() {
     }
   };
 
+  const handleMigratePokedex = async () => {
+    if (!user || pokedex.length === 0) return;
+    setLoading(true);
+    setError(null);
+    try {
+      let count = 0;
+      
+      for (const fakemon of pokedex) {
+        const updates: any = {};
+        let changed = false;
+        
+        // 1. Fix Rarity
+        if (!fakemon.rarity) {
+          updates.rarity = "Comum";
+          changed = true;
+        }
+        
+        // 2. Fix Background (Transparent)
+        // We check if it's likely a data URL and not already processed
+        if (fakemon.imageUrl && fakemon.imageUrl.startsWith('data:image')) {
+          const transparent = await removeWhiteBackground(fakemon.imageUrl);
+          if (transparent !== fakemon.imageUrl) {
+            updates.imageUrl = await compressImage(transparent);
+            changed = true;
+          }
+        }
+        
+        if (changed) {
+          const docRef = doc(db, "fakemons", fakemon.id);
+          try {
+            // Use a simple update call for each to avoid batch limits and handle heavy image data
+            const batch = writeBatch(db);
+            batch.update(docRef, updates);
+            await batch.commit();
+            count++;
+          } catch (err) {
+            console.error(`Error updating fakemon ${fakemon.id}:`, err);
+          }
+        }
+      }
+      
+      if (count > 0) {
+        alert(`${count} Fakemons atualizados e otimizados com sucesso!`);
+      } else {
+        alert("Sua Pokédex já está 100% otimizada!");
+      }
+    } catch (err) {
+      console.error("Migration error:", err);
+      setError("Erro ao migrar a Pokédex.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleDownloadCard = async (fakemon: SavedFakemon) => {
     setDownloadingId(fakemon.id);
     try {
+      const rarityStyle = getRarityStyles(fakemon.rarity);
+      const transparentUrl = await removeWhiteBackground(fakemon.imageUrl);
+      
       // Create a temporary container for the card
       const container = document.createElement('div');
       container.style.position = 'fixed';
@@ -348,40 +504,43 @@ export default function App() {
       const cardHtml = `
         <div id="super-trunfo-card" style="
           width: 400px;
-          background: white;
-          border: 12px solid black;
+          background: ${rarityStyle.bg};
+          border: ${rarityStyle.border};
           padding: 20px;
           font-family: 'Inter', sans-serif;
           display: flex;
           flex-direction: column;
           gap: 20px;
-          box-shadow: 20px 20px 0px 0px rgba(0,0,0,1);
+          box-shadow: ${rarityStyle.glow};
         ">
-          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 4px solid black; padding-bottom: 10px;">
-            <h1 style="margin: 0; font-size: 32px; font-weight: 900; text-transform: uppercase; font-style: italic; letter-spacing: -2px;">${fakemon.name}</h1>
-            <span style="font-weight: 900; font-size: 14px; background: black; color: white; padding: 4px 8px;">#${String(fakemon.pokedexNumber).padStart(3, '0')}</span>
+          <div style="display: flex; justify-content: space-between; align-items: center; border-bottom: 4px solid ${rarityStyle.accent}; padding-bottom: 10px;">
+            <h1 style="margin: 0; font-size: 32px; font-weight: 900; text-transform: uppercase; font-style: italic; letter-spacing: -2px; color: ${rarityStyle.text};">${fakemon.name}</h1>
+            <span style="font-weight: 900; font-size: 14px; background: ${rarityStyle.accent}; color: white; padding: 4px 8px;">#${String(fakemon.pokedexNumber).padStart(3, '0')}</span>
           </div>
           
-          <div style="aspect-ratio: 1/1; border: 4px solid black; background: #f8f8f8; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-            <img src="${fakemon.imageUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 20px;" />
+          <div style="aspect-ratio: 1/1; border: 4px solid ${rarityStyle.accent}; background: rgba(0,0,0,0.03); overflow: hidden; display: flex; align-items: center; justify-content: center;">
+            <img src="${transparentUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 20px;" />
           </div>
 
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            ${fakemon.typing.split('/').map(t => `
-              <span style="
-                background: ${getTypeColor(t)};
-                color: white;
-                padding: 4px 12px;
-                font-size: 12px;
-                font-weight: 900;
-                text-transform: uppercase;
-                border: 2px solid black;
-                box-shadow: 2px 2px 0px 0px rgba(0,0,0,1);
-              ">${t.trim()}</span>
-            `).join('')}
+          <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+              ${fakemon.typing.split('/').map(t => `
+                <span style="
+                  background: ${getTypeColor(t)};
+                  color: white;
+                  padding: 4px 12px;
+                  font-size: 12px;
+                  font-weight: 900;
+                  text-transform: uppercase;
+                  border: 2px solid black;
+                  box-shadow: 2px 2px 0px 0px rgba(0,0,0,1);
+                ">${t.trim()}</span>
+              `).join('')}
+            </div>
+            <span style="font-size: 10px; font-weight: 900; text-transform: uppercase; color: ${rarityStyle.accent}; opacity: 0.7;">${fakemon.rarity || "Comum"}</span>
           </div>
 
-          <div style="background: black; padding: 20px; border: 4px solid black; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+          <div style="background: ${rarityStyle.accent}; padding: 20px; border: 4px solid ${rarityStyle.accent}; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
             <div style="display: flex; flex-direction: column; gap: 4px;">
               <span style="color: rgba(255,255,255,0.5); font-size: 10px; font-weight: 900; text-transform: uppercase;">HP</span>
               <div style="height: 12px; background: rgba(255,255,255,0.1); position: relative; border: 1px solid rgba(255,255,255,0.2);">
@@ -457,6 +616,230 @@ export default function App() {
     }
   };
 
+  const handleGenerateAnimation = async (fakemon: SavedFakemon) => {
+    setGeneratingVideoId(fakemon.id);
+    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    
+    try {
+      const rarityStyle = getRarityStyles(fakemon.rarity);
+      
+      // 1. Generate TTS Narration
+      const ttsResponse = await ai.models.generateContent({
+        model: "gemini-2.5-flash-preview-tts",
+        contents: [{ parts: [{ text: `Narre com uma voz épica e misteriosa de Pokédex: ${fakemon.name}. ${fakemon.classification}. ${fakemon.lore}` }] }],
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: 'Charon' },
+            },
+          },
+        },
+      });
+
+      const base64Audio = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+      if (!base64Audio) throw new Error("Falha ao gerar narração.");
+
+      // Decode TTS Audio (Raw PCM 16-bit Mono at 24000Hz)
+      const audioData = atob(base64Audio);
+      const audioArray = new Uint8Array(audioData.length);
+      for (let i = 0; i < audioData.length; i++) {
+        audioArray[i] = audioData.charCodeAt(i);
+      }
+      
+      // Gemini TTS returns raw PCM 16-bit Mono at 24000Hz
+      // Ensure buffer length is even for Int16Array
+      const buffer = audioArray.length % 2 === 0 ? audioArray.buffer : audioArray.buffer.slice(0, -1);
+      const pcmData = new Int16Array(buffer);
+      const audioBuffer = audioCtx.createBuffer(1, pcmData.length, 24000);
+      const nowBuffering = audioBuffer.getChannelData(0);
+      for (let i = 0; i < pcmData.length; i++) {
+        // Normalize 16-bit PCM to float [-1, 1]
+        nowBuffering[i] = pcmData[i] / 32768;
+      }
+
+      const ttsSource = audioCtx.createBufferSource();
+      ttsSource.buffer = audioBuffer;
+
+      const destination = audioCtx.createMediaStreamDestination();
+      ttsSource.connect(destination);
+
+      // 2. Setup Canvas
+      const canvas = document.createElement('canvas');
+      canvas.width = 1080;
+      canvas.height = 1080;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+
+      // Load image and remove background on the fly
+      const transparentUrl = await removeWhiteBackground(fakemon.imageUrl);
+      const img = new Image();
+      img.src = transparentUrl;
+      await new Promise((resolve, reject) => {
+        img.onload = resolve;
+        img.onerror = reject;
+      });
+
+      // 3. Setup Recording
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') 
+        ? 'video/webm;codecs=vp9,opus' 
+        : 'video/webm';
+
+      const canvasStream = canvas.captureStream(30);
+      const combinedStream = new MediaStream([
+        ...canvasStream.getVideoTracks(),
+        ...destination.stream.getAudioTracks()
+      ]);
+
+      const recorder = new MediaRecorder(combinedStream, { mimeType });
+      const chunks: Blob[] = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunks.push(e.data);
+      };
+      
+      recorder.onstop = () => {
+        const blob = new Blob(chunks, { type: 'video/webm' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `fakemon-showcase-${fakemon.name.toLowerCase()}.webm`;
+        a.click();
+        URL.revokeObjectURL(url);
+        setGeneratingVideoId(null);
+        audioCtx.close();
+      };
+
+      // Start
+      recorder.start();
+      ttsSource.start(0);
+
+      const startTime = performance.now();
+      const duration = (audioBuffer.duration + 1) * 1000; // Match audio duration + padding
+
+      // Particles
+      const particles = Array.from({ length: 50 }, () => ({
+        x: Math.random() * canvas.width,
+        y: Math.random() * canvas.height,
+        size: Math.random() * 3 + 1,
+        speed: Math.random() * 2 + 0.5,
+        opacity: Math.random()
+      }));
+
+      const animate = (time: number) => {
+        const elapsed = time - startTime;
+        
+        // Background
+        const bgGradient = ctx.createRadialGradient(canvas.width/2, canvas.height/2, 0, canvas.width/2, canvas.height/2, 800);
+        bgGradient.addColorStop(0, rarityStyle.bg === 'white' ? '#1a1a2e' : rarityStyle.bg);
+        bgGradient.addColorStop(1, '#0a0a0a');
+        ctx.fillStyle = bgGradient;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Particles
+        ctx.fillStyle = rarityStyle.accent;
+        particles.forEach(p => {
+          p.y -= p.speed;
+          if (p.y < 0) p.y = canvas.height;
+          ctx.globalAlpha = p.opacity * (0.5 + Math.sin(elapsed / 500) * 0.5);
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.fill();
+        });
+        ctx.globalAlpha = 1;
+
+        // "Life" Animation: Breathing & Floating
+        const breathe = 1 + Math.sin(elapsed / 1000) * 0.03;
+        const float = Math.sin(elapsed / 1500) * 20;
+        
+        // Glow behind
+        ctx.shadowBlur = 50 + Math.sin(elapsed / 500) * 20;
+        ctx.shadowColor = rarityStyle.accent;
+        
+        const imgSize = 750 * breathe;
+        ctx.drawImage(
+          img,
+          (canvas.width - imgSize) / 2,
+          (canvas.height - imgSize) / 2 - 100 + float,
+          imgSize,
+          imgSize
+        );
+        ctx.shadowBlur = 0;
+
+        // UI Overlay
+        ctx.strokeStyle = rarityStyle.accent;
+        ctx.lineWidth = 4;
+        ctx.strokeRect(50, 50, canvas.width - 100, canvas.height - 100);
+
+        // Scanning line
+        const scanY = (elapsed % 3000) / 3000 * canvas.height;
+        const scanGrad = ctx.createLinearGradient(0, scanY - 50, 0, scanY + 50);
+        scanGrad.addColorStop(0, 'transparent');
+        scanGrad.addColorStop(0.5, `${rarityStyle.accent}33`); // 20% opacity
+        scanGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = scanGrad;
+        ctx.fillRect(50, scanY - 50, canvas.width - 100, 100);
+
+        // Text
+        ctx.textAlign = 'center';
+        
+        // Name
+        ctx.fillStyle = rarityStyle.accent;
+        ctx.font = 'black italic 100px Inter';
+        ctx.fillText(fakemon.name.toUpperCase(), canvas.width / 2, 180);
+
+        // Classification
+        ctx.fillStyle = 'white';
+        ctx.font = 'bold 30px Inter';
+        ctx.fillText(fakemon.classification.toUpperCase(), canvas.width / 2, 230);
+
+        // Lore (Typewriter effect or scrolling)
+        ctx.font = '400 36px Inter';
+        const words = fakemon.lore.split(' ');
+        const maxWidth = 850;
+        const lineHeight = 50;
+        const lines = [];
+        let currentLine = '';
+        
+        for(let n = 0; n < words.length; n++) {
+          let testLine = currentLine + words[n] + ' ';
+          if (ctx.measureText(testLine).width > maxWidth && n > 0) {
+            lines.push(currentLine);
+            currentLine = words[n] + ' ';
+          } else {
+            currentLine = testLine;
+          }
+        }
+        lines.push(currentLine);
+
+        const scrollOffset = (elapsed / duration) * (lines.length * lineHeight + 400);
+        
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 780, canvas.width, 220);
+        ctx.clip();
+        
+        lines.forEach((l, i) => {
+          const y = 1000 + (i * lineHeight) - scrollOffset;
+          ctx.fillText(l, canvas.width / 2, y);
+        });
+        ctx.restore();
+
+        if (elapsed < duration) {
+          requestAnimationFrame(animate);
+        } else {
+          recorder.stop();
+        }
+      };
+
+      requestAnimationFrame(animate);
+    } catch (err) {
+      console.error("Error generating animation:", err);
+      setError("Erro ao gerar a animação com narração.");
+      setGeneratingVideoId(null);
+      audioCtx.close();
+    }
+  };
+
   const withRetry = async <T extends unknown>(fn: () => Promise<T>, maxRetries = 3, initialDelay = 2000): Promise<T> => {
     let lastError: any;
     for (let i = 0; i < maxRetries; i++) {
@@ -487,8 +870,6 @@ export default function App() {
     setResult(null);
 
     try {
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
-      
       // Handle Randomization
       let finalCategory = category;
       let finalEvolutions = evolutions;
@@ -567,8 +948,8 @@ export default function App() {
               "classification": "Fakemon [Tipo de Criatura]",
               "typing": "Tipos",
               "lore": "Descrição detalhada (2-3 parágrafos) sobre comportamento, habitat e biologia.",
-              "imagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão NORMAL (estilo Ken Sugimori, fundo branco, detalhes nítidos, iluminação 3D moderna).",
-              "shinyImagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão BRILHANTE (SHINY). Descreva cores alternativas raras e contrastantes que fujam do padrão normal, mantendo o estilo visual.",
+              "imagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão NORMAL (estilo Ken Sugimori, ISOLADO EM FUNDO BRANCO PURO, detalhes nítidos, iluminação 3D moderna).",
+              "shinyImagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão BRILHANTE (SHINY). Descreva cores alternativas raras e contrastantes que fujam do padrão normal, mantendo o estilo visual, ISOLADO EM FUNDO BRANCO PURO.",
               "stats": {
                 "hp": number,
                 "attack": number,
@@ -653,7 +1034,8 @@ export default function App() {
         }
 
         // Compress images before saving to Firestore to avoid 1MB limit
-        const compressedImageUrl = await compressImage(imageUrl);
+        const transparentImageUrl = await removeWhiteBackground(imageUrl);
+        const compressedImageUrl = await compressImage(transparentImageUrl);
 
         // Save Normal Version
         const normalDoc = {
@@ -662,6 +1044,7 @@ export default function App() {
           pokedexNumber,
           isShiny: false,
           isMega: isStageMega,
+          rarity: finalCategory,
           suggestedBy: suggestedBy.trim(),
           createdAt: new Date(),
           userEmail: user.email,
@@ -690,7 +1073,8 @@ export default function App() {
             }
           }
 
-          const compressedShinyImageUrl = await compressImage(shinyImageUrl);
+          const transparentShinyImageUrl = await removeWhiteBackground(shinyImageUrl);
+          const compressedShinyImageUrl = await compressImage(transparentShinyImageUrl);
 
           // Save Shiny Version as separate card
           const shinyDoc = {
@@ -699,6 +1083,7 @@ export default function App() {
             pokedexNumber,
             isShiny: true,
             isMega: isStageMega,
+            rarity: finalCategory,
             suggestedBy: suggestedBy.trim(),
             createdAt: new Date(),
             userEmail: user.email,
@@ -974,16 +1359,17 @@ export default function App() {
                       {result.stages.flatMap((stage, index) => {
                         const cards = [];
                         const isStageMega = characteristic === "mega" && index === result.stages.length - 1;
+                        const rarityStyle = getRarityStyles(category === "Aleatório" ? "Comum" : category);
                         
                         // Normal Card
                         cards.push(
-                          <div key={`${index}-normal`} className="space-y-8">
+                          <div key={`${index}-normal`} className="space-y-8 p-6 border-4" style={{ backgroundColor: rarityStyle.bg, borderColor: rarityStyle.accent, boxShadow: `8px 8px 0px 0px ${rarityStyle.accent}` }}>
                             <div className="flex items-center gap-4">
-                              <div className="bg-black text-[#00FF00] w-8 h-8 flex items-center justify-center font-black text-sm">
+                              <div className="text-white w-8 h-8 flex items-center justify-center font-black text-sm" style={{ backgroundColor: rarityStyle.accent }}>
                                 {String(index + 1).padStart(2, '0')}
                               </div>
-                              <div className="h-[2px] flex-1 bg-black/10" />
-                              <div className="bg-black text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest">
+                              <div className="h-[2px] flex-1" style={{ backgroundColor: `${rarityStyle.accent}33` }} />
+                              <div className="text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest" style={{ backgroundColor: rarityStyle.accent }}>
                                 {isStageMega ? "Mega Evolução" : "Forma Normal"}
                               </div>
                             </div>
@@ -991,7 +1377,7 @@ export default function App() {
                             <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
                               {/* Image & Stats Display */}
                               <div className="relative group">
-                                <div className="relative aspect-square bg-white border-4 border-black overflow-hidden z-10">
+                                <div className="relative aspect-square border-4 overflow-hidden z-10" style={{ backgroundColor: rarityStyle.bg, borderColor: rarityStyle.accent }}>
                                   {stage.imageUrl ? (
                                     <img 
                                       src={stage.imageUrl} 
@@ -1004,7 +1390,7 @@ export default function App() {
                                       <ImageIcon className="w-12 h-12 opacity-20" />
                                     </div>
                                   )}
-                                  <div className="absolute top-4 right-4 bg-black text-[#00FF00] px-3 py-1 text-[10px] font-black uppercase tracking-widest border-2 border-[#00FF00]">
+                                  <div className="absolute top-4 right-4 text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest border-2" style={{ backgroundColor: rarityStyle.accent, borderColor: 'white' }}>
                                     {isStageMega ? "MEGA" : `ESTÁGIO ${index + 1}`}
                                   </div>
                                   {suggestedBy.trim() && (
@@ -1015,24 +1401,24 @@ export default function App() {
                                 </div>
 
                                 {/* The "Black Part" - Stats Section */}
-                                <div className="bg-black p-6 border-4 border-black -mt-1 relative z-0 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.2)]">
+                                <div className="p-6 border-4 -mt-1 relative z-0 shadow-[8px_8px_0px_0px_rgba(0,0,0,0.2)]" style={{ backgroundColor: rarityStyle.accent, borderColor: rarityStyle.accent }}>
                                   <div className="grid grid-cols-2 gap-x-8 gap-y-4">
-                                    <StatBar label="HP" value={stage.stats.hp} color="#FF4B4B" />
-                                    <StatBar label="ATK" value={stage.stats.attack} color="#FF9F4B" />
-                                    <StatBar label="DEF" value={stage.stats.defense} color="#FFD94B" />
-                                    <StatBar label="S.ATK" value={stage.stats.spAtk} color="#4B7BFF" />
-                                    <StatBar label="S.DEF" value={stage.stats.spDef} color="#4BFF7B" />
-                                    <StatBar label="SPD" value={stage.stats.speed} color="#FF4BFF" />
+                                    <StatBar label="HP" value={stage.stats.hp} color="white" />
+                                    <StatBar label="ATK" value={stage.stats.attack} color="white" />
+                                    <StatBar label="DEF" value={stage.stats.defense} color="white" />
+                                    <StatBar label="S.ATK" value={stage.stats.spAtk} color="white" />
+                                    <StatBar label="S.DEF" value={stage.stats.spDef} color="white" />
+                                    <StatBar label="SPD" value={stage.stats.speed} color="white" />
                                   </div>
                                 </div>
                               </div>
 
                               {/* Info Display */}
                               <div className="space-y-6">
-                                <div className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-black pb-4">
+                                <div className="flex flex-wrap items-end justify-between gap-4 border-b-2 pb-4" style={{ borderColor: rarityStyle.accent }}>
                                   <div className="space-y-1">
                                     <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50">REGISTRO #{String(stage.pokedexNumber || index + 1).padStart(3, '0')}</p>
-                                    <h3 className="text-4xl md:text-5xl font-black uppercase tracking-tighter italic leading-none">{stage.name}</h3>
+                                    <h3 className="text-4xl md:text-5xl font-black uppercase tracking-tighter italic leading-none" style={{ color: rarityStyle.text }}>{stage.name}</h3>
                                   </div>
                                   <div className="flex gap-2">
                                     {stage.typing.split('/').map(t => (
@@ -1067,7 +1453,7 @@ export default function App() {
                         // Shiny Card
                         if (stage.shinyImageUrl) {
                           cards.push(
-                            <div key={`${index}-shiny`} className="space-y-8">
+                            <div key={`${index}-shiny`} className="space-y-8 p-6 border-4" style={{ backgroundColor: rarityStyle.bg, borderColor: '#fbbf24', boxShadow: `8px 8px 0px 0px #fbbf24` }}>
                               <div className="flex items-center gap-4">
                                 <div className="bg-yellow-400 text-black w-8 h-8 flex items-center justify-center font-black text-sm">
                                   <Star size={14} fill="currentColor" />
@@ -1081,7 +1467,7 @@ export default function App() {
                               <div className="grid grid-cols-1 xl:grid-cols-2 gap-10">
                                 {/* Image & Stats Display */}
                                 <div className="relative group">
-                                  <div className="relative aspect-square bg-white border-4 border-yellow-400 overflow-hidden z-10">
+                                  <div className="relative aspect-square border-4 overflow-hidden z-10" style={{ backgroundColor: rarityStyle.bg, borderColor: '#fbbf24' }}>
                                     <img 
                                       src={stage.shinyImageUrl} 
                                       alt={`${stage.name} Shiny`} 
@@ -1164,72 +1550,90 @@ export default function App() {
                 <h2 className="text-5xl font-black uppercase tracking-tighter italic leading-none">Pokédex Regional</h2>
                 <p className="text-xs font-mono opacity-50 uppercase tracking-widest">Registros de todas as descobertas forjadas</p>
               </div>
-              <div className="relative w-full md:w-96">
-                <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
-                <input 
-                  type="text" 
-                  placeholder="Buscar por nome ou tipo..." 
-                  className="w-full bg-white border-2 border-black p-4 pl-12 font-bold focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all"
-                  value={searchTerm}
-                  onChange={(e) => setSearchTerm(e.target.value)}
-                />
+              <div className="flex flex-col md:flex-row items-stretch md:items-center gap-4 w-full md:w-auto">
+                <div className="relative w-full md:w-96">
+                  <Search className="absolute left-4 top-1/2 -translate-y-1/2 opacity-30" size={18} />
+                  <input 
+                    type="text" 
+                    placeholder="Buscar por nome ou tipo..." 
+                    className="w-full bg-white border-2 border-black p-4 pl-12 font-bold focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all"
+                    value={searchTerm}
+                    onChange={(e) => setSearchTerm(e.target.value)}
+                  />
+                </div>
+                <button
+                  onClick={handleMigratePokedex}
+                  disabled={loading}
+                  className="bg-black text-[#00FF00] px-6 py-4 font-black uppercase text-[10px] border-2 border-black hover:bg-gray-900 transition-all flex items-center justify-center gap-2 disabled:opacity-50"
+                  title="Atualiza raridades e otimiza registros antigos"
+                >
+                  {loading ? <Loader2 size={14} className="animate-spin" /> : <Zap size={14} />}
+                  Otimizar Pokédex
+                </button>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-8">
               {pokedex
                 .filter(f => f.name.toLowerCase().includes(searchTerm.toLowerCase()) || f.typing.toLowerCase().includes(searchTerm.toLowerCase()))
-                .map((fakemon) => (
-                <motion.div 
-                  layout
-                  key={fakemon.id}
-                  className="group relative bg-white border-4 border-black shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] hover:-translate-x-1 hover:-translate-y-1 hover:shadow-[12px_12px_0px_0px_rgba(0,0,0,1)] transition-all"
-                >
-                  <div className="relative aspect-square border-b-4 border-black overflow-hidden bg-gray-50">
-                    <img 
-                      src={fakemon.imageUrl} 
-                      alt={fakemon.name} 
-                      className="w-full h-full object-contain p-6"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute top-4 left-4 bg-black text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest">
-                      #{String(fakemon.pokedexNumber).padStart(3, '0')}
-                    </div>
-                    {fakemon.isShiny && (
-                      <div className="absolute top-4 right-4 bg-yellow-400 text-black px-3 py-1 text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
-                        <Star size={10} fill="currentColor" /> Brilhante
-                      </div>
-                    )}
-                    {fakemon.isMega && (
-                      <div className="absolute top-4 right-4 bg-purple-600 text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
-                        <Zap size={10} fill="currentColor" /> Mega
-                      </div>
-                    )}
-                    {fakemon.suggestedBy && (
-                      <div className="absolute bottom-4 left-4 bg-black/80 text-white px-2 py-1 text-[8px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-sm">
-                        Sugerido por: {fakemon.suggestedBy}
-                      </div>
-                    )}
-                  </div>
-                  
-                  <div className="p-6 space-y-4">
-                    <div className="flex justify-between items-start gap-4">
-                      <div>
-                        <h3 className="text-2xl font-black uppercase tracking-tighter italic leading-none mb-1">{fakemon.name}</h3>
-                        <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest">{fakemon.classification}</p>
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {fakemon.typing.split('/').map(t => (
-                          <div 
-                            key={t} 
-                            className="px-2 py-0.5 text-[8px] font-black uppercase text-white border border-black shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]"
-                            style={{ backgroundColor: getTypeColor(t) }}
-                          >
-                            {t.trim()}
+                .map((fakemon) => {
+                  const rarityStyle = getRarityStyles(fakemon.rarity);
+                  return (
+                    <motion.div 
+                      layout
+                      key={fakemon.id}
+                      className="group relative border-4 transition-all"
+                      style={{ 
+                        backgroundColor: rarityStyle.bg,
+                        borderColor: rarityStyle.accent,
+                        boxShadow: `8px 8px 0px 0px ${rarityStyle.accent}`
+                      }}
+                    >
+                      <div className="relative aspect-square border-b-4 overflow-hidden bg-gray-50/50" style={{ borderColor: rarityStyle.accent }}>
+                        <img 
+                          src={fakemon.imageUrl} 
+                          alt={fakemon.name} 
+                          className="w-full h-full object-contain p-6"
+                          referrerPolicy="no-referrer"
+                        />
+                        <div className="absolute top-4 left-4 text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest" style={{ backgroundColor: rarityStyle.accent }}>
+                          #{String(fakemon.pokedexNumber).padStart(3, '0')}
+                        </div>
+                        {fakemon.isShiny && (
+                          <div className="absolute top-4 right-4 bg-yellow-400 text-black px-3 py-1 text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                            <Star size={10} fill="currentColor" /> Brilhante
                           </div>
-                        ))}
+                        )}
+                        {fakemon.isMega && !fakemon.isShiny && (
+                          <div className="absolute top-4 right-4 bg-purple-600 text-white px-3 py-1 text-[10px] font-black uppercase tracking-widest flex items-center gap-1">
+                            <Zap size={10} fill="currentColor" /> Mega
+                          </div>
+                        )}
+                        {fakemon.suggestedBy && (
+                          <div className="absolute bottom-4 left-4 bg-black/80 text-white px-2 py-1 text-[8px] font-black uppercase tracking-widest border border-white/20 backdrop-blur-sm">
+                            Sugerido por: {fakemon.suggestedBy}
+                          </div>
+                        )}
                       </div>
-                    </div>
+                      
+                      <div className="p-6 space-y-4">
+                        <div className="flex justify-between items-start gap-4">
+                          <div>
+                            <h3 className="text-2xl font-black uppercase tracking-tighter italic leading-none mb-1" style={{ color: rarityStyle.text }}>{fakemon.name}</h3>
+                            <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest">{fakemon.classification}</p>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {fakemon.typing.split('/').map(t => (
+                              <div 
+                                key={t} 
+                                className="px-2 py-0.5 text-[8px] font-black uppercase text-white border border-black shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]"
+                                style={{ backgroundColor: getTypeColor(t) }}
+                              >
+                                {t.trim()}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
                     <div className="grid grid-cols-3 gap-2">
                       <div className="bg-black/5 p-2 text-center border border-black/10">
@@ -1282,10 +1686,19 @@ export default function App() {
                       >
                         {downloadingId === fakemon.id ? <Loader2 size={14} className="animate-spin" /> : <Download size={14} />}
                       </button>
+                      <button 
+                        onClick={() => handleGenerateAnimation(fakemon)}
+                        disabled={generatingVideoId === fakemon.id}
+                        className="text-purple-600 hover:bg-purple-50 p-2 transition-colors disabled:opacity-50"
+                        title="Gerar Animação Pokédex"
+                      >
+                        {generatingVideoId === fakemon.id ? <Loader2 size={14} className="animate-spin" /> : <Video size={14} />}
+                      </button>
+                      </div>
                     </div>
-                  </div>
-                </motion.div>
-              ))}
+                  </motion.div>
+                );
+              })}
             </div>
 
             <AnimatePresence>
