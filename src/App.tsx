@@ -20,7 +20,7 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
 enum OperationType {
   CREATE = 'create',
@@ -178,6 +178,10 @@ export default function App() {
   const [type1, setType1] = useState("Normal");
   const [type2, setType2] = useState("Nenhum");
   const [evolutions, setEvolutions] = useState(1);
+  const [evolutionBranches, setEvolutionBranches] = useState(1);
+  const [branchDescription, setBranchDescription] = useState("");
+  const [regionalFormsCount, setRegionalFormsCount] = useState(1);
+  const [regionalFormsDescription, setRegionalFormsDescription] = useState("");
   const [characteristic, setCharacteristic] = useState("none");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<FakemonResult | null>(null);
@@ -276,11 +280,12 @@ export default function App() {
         const data = imageData.data;
         
         // Threshold for "white"
-        const threshold = 240;
+        const threshold = 250; // More conservative
         for (let i = 0; i < data.length; i += 4) {
           const r = data[i];
           const g = data[i+1];
           const b = data[i+2];
+          // Check for pure white or near-pure white
           if (r > threshold && g > threshold && b > threshold) {
             data[i+3] = 0; // Set alpha to 0
           }
@@ -295,11 +300,11 @@ export default function App() {
   const getRarityStyles = (rarity: string = "Comum") => {
     const styles: Record<string, { border: string, glow: string, text: string, bg: string, accent: string }> = {
       "Comum": { 
-        border: "12px solid black", 
+        border: "12px solid #000000", 
         glow: "20px 20px 0px 0px rgba(0,0,0,1)", 
-        text: "black", 
-        bg: "white",
-        accent: "black"
+        text: "#000000", 
+        bg: "#FFFFFF",
+        accent: "#000000"
       },
       "Raro": { 
         border: "12px solid #3b82f6", 
@@ -522,8 +527,8 @@ export default function App() {
             <img src="${transparentUrl}" style="width: 100%; height: 100%; object-fit: contain; padding: 20px;" />
           </div>
 
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <div style="display: flex; justify-content: space-between; align-items: flex-start; gap: 10px;">
+            <div style="display: flex; gap: 8px; flex-wrap: nowrap;">
               ${fakemon.typing.split('/').map(t => `
                 <span style="
                   background: ${getTypeColor(t)};
@@ -623,67 +628,115 @@ export default function App() {
     try {
       const rarityStyle = getRarityStyles(fakemon.rarity);
       
-      // 1. Generate TTS Narration
-      const ttsResponse = await ai.models.generateContent({
-        model: "gemini-2.5-flash-preview-tts",
-        contents: [{ parts: [{ text: `Narre com uma voz épica e misteriosa de Pokédex: ${fakemon.name}. ${fakemon.classification}. ${fakemon.lore}` }] }],
+      // 1. Generate Narrative Script
+      const scriptResponse = await withRetry(() => ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: [{ parts: [{ text: `
+          Você é o Narrador Oficial da Pokédex Internacional, com uma voz profunda, épica e cheia de autoridade.
+          Sua missão é descrever o Fakemon abaixo capturando sua essência única.
+          
+          DADOS DO FAKEMON:
+          - Nome: ${fakemon.name}
+          - Tipo: ${fakemon.typing}
+          - Classificação: ${fakemon.classification}
+          - Estágio: ${fakemon.isMega ? 'Mega Evolução' : 'Evolução Normal'}
+          - Raridade: ${fakemon.rarity || 'Comum'}
+          - Descrição (Lore): ${fakemon.lore}
+          
+          INSTRUÇÕES DO SCRIPT:
+          1. Comece de forma impactante.
+          2. Não apenas leia as estatísticas; conte uma breve história sobre como ele se comporta ou seu poder especial.
+          3. Mantenha o script entre 250 e 400 caracteres.
+          4. O tom deve ser de "mocumentário" de vida selvagem épico.
+          5. Finalize com uma frase que resuma sua periculosidade ou beleza.
+          6. Idioma: Português Brasileiro.
+        ` }] }],
+      }));
+
+      const narrativeScript = scriptResponse.text || `${fakemon.name}. ${fakemon.classification}. ${fakemon.lore}`;
+
+      // 2. Generate TTS Narration
+      const ttsResponse = await withRetry(() => ai.models.generateContent({
+        model: "gemini-3.1-flash-tts-preview",
+        contents: [{ parts: [{ text: `Narre com uma voz épica de Pokédex o seguinte roteiro: ${narrativeScript}` }] }],
         config: {
           responseModalities: [Modality.AUDIO],
           speechConfig: {
             voiceConfig: {
-              prebuiltVoiceConfig: { voiceName: 'Charon' },
+              prebuiltVoiceConfig: { voiceName: 'Charon' }, // Epic male voice
             },
           },
         },
-      });
+      }));
 
       const base64Audio = ttsResponse.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
       if (!base64Audio) throw new Error("Falha ao gerar narração.");
 
       // Decode TTS Audio (Raw PCM 16-bit Mono at 24000Hz)
-      const audioData = atob(base64Audio);
-      const audioArray = new Uint8Array(audioData.length);
-      for (let i = 0; i < audioData.length; i++) {
-        audioArray[i] = audioData.charCodeAt(i);
+      const binaryString = atob(base64Audio);
+      const audioLen = Math.floor(binaryString.length / 2);
+      const pcmData = new Int16Array(audioLen);
+      for (let i = 0; i < audioLen; i++) {
+        // Correct way to read 16-bit PCM from binary string
+        const low = binaryString.charCodeAt(i * 2);
+        const high = binaryString.charCodeAt(i * 2 + 1);
+        let val = low + (high << 8);
+        if (val & 0x8000) val |= 0xffff0000; // Sign extend
+        pcmData[i] = val;
       }
       
-      // Gemini TTS returns raw PCM 16-bit Mono at 24000Hz
-      // Ensure buffer length is even for Int16Array
-      const buffer = audioArray.length % 2 === 0 ? audioArray.buffer : audioArray.buffer.slice(0, -1);
-      const pcmData = new Int16Array(buffer);
       const audioBuffer = audioCtx.createBuffer(1, pcmData.length, 24000);
-      const nowBuffering = audioBuffer.getChannelData(0);
+      const channelData = audioBuffer.getChannelData(0);
       for (let i = 0; i < pcmData.length; i++) {
-        // Normalize 16-bit PCM to float [-1, 1]
-        nowBuffering[i] = pcmData[i] / 32768;
+        channelData[i] = pcmData[i] / 32768;
       }
 
+      await audioCtx.resume();
       const ttsSource = audioCtx.createBufferSource();
       ttsSource.buffer = audioBuffer;
 
       const destination = audioCtx.createMediaStreamDestination();
       ttsSource.connect(destination);
+      // Removed ttsSource.connect(audioCtx.destination) to prevent browser playback
 
-      // 2. Setup Canvas
+      // 3. Setup Canvas
       const canvas = document.createElement('canvas');
       canvas.width = 1080;
       canvas.height = 1080;
-      const ctx = canvas.getContext('2d');
+      const ctx = canvas.getContext('2d', { alpha: false }); // Background is opaque
       if (!ctx) return;
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
 
       // Load image and remove background on the fly
-      const transparentUrl = await removeWhiteBackground(fakemon.imageUrl);
+      const transparentUrl = await removeWhiteBackground(fakemon.imageUrl || '');
       const img = new Image();
+      img.crossOrigin = "anonymous";
       img.src = transparentUrl;
       await new Promise((resolve, reject) => {
         img.onload = resolve;
-        img.onerror = reject;
+        img.onerror = () => {
+          console.warn("Failed to load transparent image, using original.");
+          img.src = fakemon.imageUrl || '';
+          img.onload = resolve;
+          img.onerror = reject;
+        };
       });
 
+      // Ensure fonts are loaded for canvas
+      if ('fonts' in document) {
+        await (document as any).fonts.ready;
+      }
+
       // 3. Setup Recording
-      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9,opus') 
-        ? 'video/webm;codecs=vp9,opus' 
-        : 'video/webm';
+      const possibleTypes = [
+        'video/webm;codecs=vp9,opus',
+        'video/webm;codecs=vp8,opus',
+        'video/webm',
+        'video/mp4',
+        'video/quicktime'
+      ];
+      const mimeType = possibleTypes.find(type => MediaRecorder.isTypeSupported(type)) || 'video/webm';
 
       const canvasStream = canvas.captureStream(30);
       const combinedStream = new MediaStream([
@@ -698,25 +751,29 @@ export default function App() {
       };
       
       recorder.onstop = () => {
-        const blob = new Blob(chunks, { type: 'video/webm' });
+        if (chunks.length === 0) {
+          setError("Falha na gravação: tente novamente.");
+          setGeneratingVideoId(null);
+          audioCtx.close().catch(() => {});
+          return;
+        }
+        
+        const extension = mimeType.includes('mp4') ? 'mp4' : 'webm';
+        const blob = new Blob(chunks, { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = `fakemon-showcase-${fakemon.name.toLowerCase()}.webm`;
+        a.download = `fakemon-${fakemon.name.toLowerCase()}.${extension}`;
         a.click();
-        URL.revokeObjectURL(url);
-        setGeneratingVideoId(null);
-        audioCtx.close();
+        
+        setTimeout(() => {
+          URL.revokeObjectURL(url);
+          setGeneratingVideoId(null);
+          audioCtx.close().catch(() => {});
+        }, 100);
       };
 
-      // Start
-      recorder.start();
-      ttsSource.start(0);
-
-      const startTime = performance.now();
-      const duration = (audioBuffer.duration + 1) * 1000; // Match audio duration + padding
-
-      // Particles
+      // Animation Loop logic
       const particles = Array.from({ length: 50 }, () => ({
         x: Math.random() * canvas.width,
         y: Math.random() * canvas.height,
@@ -725,7 +782,16 @@ export default function App() {
         opacity: Math.random()
       }));
 
-      const animate = (time: number) => {
+      // Start Recording
+      recorder.start(500); // 500ms slices for stability
+      
+      // Give the recorder time to initialize
+      setTimeout(() => {
+        ttsSource.start(0);
+        const startTime = performance.now();
+        const duration = (audioBuffer.duration + 2) * 1000;
+
+        const animate = (time: number) => {
         const elapsed = time - startTime;
         
         // Background
@@ -738,71 +804,53 @@ export default function App() {
         // Particles
         ctx.fillStyle = rarityStyle.accent;
         particles.forEach(p => {
-          p.y -= p.speed;
-          if (p.y < 0) p.y = canvas.height;
+          const currentY = (p.y - (elapsed / 1000) * p.speed * 100) % canvas.height;
+          const y = currentY < 0 ? currentY + canvas.height : currentY;
           ctx.globalAlpha = p.opacity * (0.5 + Math.sin(elapsed / 500) * 0.5);
           ctx.beginPath();
-          ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+          ctx.arc(p.x, y, p.size, 0, Math.PI * 2);
           ctx.fill();
         });
         ctx.globalAlpha = 1;
 
-        // "Life" Animation: Breathing & Floating
+        // "Life" Animation
         const breathe = 1 + Math.sin(elapsed / 1000) * 0.03;
         const float = Math.sin(elapsed / 1500) * 20;
         
         // Glow behind
-        ctx.shadowBlur = 50 + Math.sin(elapsed / 500) * 20;
-        ctx.shadowColor = rarityStyle.accent;
-        
+        const glowRadius = 450 * breathe;
+        const centerX = canvas.width / 2;
+        const centerY = canvas.height / 2 - 100 + float;
+        const glowGrad = ctx.createRadialGradient(centerX, centerY, 0, centerX, centerY, glowRadius);
+        glowGrad.addColorStop(0, `${rarityStyle.accent}44`);
+        glowGrad.addColorStop(1, 'transparent');
+        ctx.fillStyle = glowGrad;
+        ctx.beginPath();
+        ctx.arc(centerX, centerY, glowRadius, 0, Math.PI * 2);
+        ctx.fill();
+
+        // Image
         const imgSize = 750 * breathe;
-        ctx.drawImage(
-          img,
-          (canvas.width - imgSize) / 2,
-          (canvas.height - imgSize) / 2 - 100 + float,
-          imgSize,
-          imgSize
-        );
-        ctx.shadowBlur = 0;
+        ctx.drawImage(img, (canvas.width - imgSize) / 2, (canvas.height - imgSize) / 2 - 100 + float, imgSize, imgSize);
 
-        // UI Overlay
-        ctx.strokeStyle = rarityStyle.accent;
-        ctx.lineWidth = 4;
-        ctx.strokeRect(50, 50, canvas.width - 100, canvas.height - 100);
-
-        // Scanning line
-        const scanY = (elapsed % 3000) / 3000 * canvas.height;
-        const scanGrad = ctx.createLinearGradient(0, scanY - 50, 0, scanY + 50);
-        scanGrad.addColorStop(0, 'transparent');
-        scanGrad.addColorStop(0.5, `${rarityStyle.accent}33`); // 20% opacity
-        scanGrad.addColorStop(1, 'transparent');
-        ctx.fillStyle = scanGrad;
-        ctx.fillRect(50, scanY - 50, canvas.width - 100, 100);
-
-        // Text
+        // Text & UI
         ctx.textAlign = 'center';
-        
-        // Name
         ctx.fillStyle = rarityStyle.accent;
-        ctx.font = 'black italic 100px Inter';
+        ctx.font = '900 94px Inter';
         ctx.fillText(fakemon.name.toUpperCase(), canvas.width / 2, 180);
 
-        // Classification
         ctx.fillStyle = 'white';
-        ctx.font = 'bold 30px Inter';
+        ctx.font = '700 30px Inter';
         ctx.fillText(fakemon.classification.toUpperCase(), canvas.width / 2, 230);
 
-        // Lore (Typewriter effect or scrolling)
+        // Lore
         ctx.font = '400 36px Inter';
         const words = fakemon.lore.split(' ');
-        const maxWidth = 850;
-        const lineHeight = 50;
         const lines = [];
         let currentLine = '';
-        
         for(let n = 0; n < words.length; n++) {
           let testLine = currentLine + words[n] + ' ';
-          if (ctx.measureText(testLine).width > maxWidth && n > 0) {
+          if (ctx.measureText(testLine).width > 850 && n > 0) {
             lines.push(currentLine);
             currentLine = words[n] + ' ';
           } else {
@@ -811,27 +859,25 @@ export default function App() {
         }
         lines.push(currentLine);
 
-        const scrollOffset = (elapsed / duration) * (lines.length * lineHeight + 400);
-        
+        const scrollOffset = (elapsed / duration) * (lines.length * 50 + 400);
         ctx.save();
         ctx.beginPath();
         ctx.rect(0, 780, canvas.width, 220);
         ctx.clip();
-        
         lines.forEach((l, i) => {
-          const y = 1000 + (i * lineHeight) - scrollOffset;
-          ctx.fillText(l, canvas.width / 2, y);
+          ctx.fillText(l, canvas.width / 2, 1000 + (i * 50) - scrollOffset);
         });
         ctx.restore();
 
-        if (elapsed < duration) {
+        if (elapsed < duration && recorder.state === 'recording') {
           requestAnimationFrame(animate);
-        } else {
+        } else if (recorder.state === 'recording') {
           recorder.stop();
         }
       };
 
-      requestAnimationFrame(animate);
+        requestAnimationFrame(animate);
+      }, 50);
     } catch (err) {
       console.error("Error generating animation:", err);
       setError("Erro ao gerar a animação com narração.");
@@ -915,29 +961,30 @@ export default function App() {
       // 1. Generate Text Content for all stages
       const isMega = finalCharacteristic === "mega";
       const isShiny = finalCharacteristic === "shiny";
-      const totalStages = isMega ? finalEvolutions + 1 : finalEvolutions;
-
+      const isRegional = finalCharacteristic === "regional";
+      
       const textPrompt = `
         Você é um Especialista em Game Design e Artista Conceitual da franquia Fakemon.
         Crie uma linha evolutiva de Fakemon com base nestes parâmetros:
         - Conceito: ${concept || "Um Fakemon criativo, original e visualmente impactante"}
         - Categoria (Raridade/Poder): ${finalCategory}
-          (Contexto de Categoria: 
-          "Comum": Fakemon de rota inicial, poder moderado.
-          "Raro": Fakemon com habilidades únicas, poder acima da média.
-          "Pseudo-Lendário": Fakemon com 3 estágios e poder altíssimo.
-          "Lendário": Fakemon único com grande poder e importância na lore.
-          "Mítico": Fakemon extremamente raro e misterioso.
-          "Fóssil": Fakemon pré-histórico ressuscitado.
-          "Ultra Beast": Fakemon de outra dimensão com design bizarro e alienígena.)
         - Tipagem: ${finalType1}${finalType2 !== "Nenhum" ? ` / ${finalType2}` : ""}
-        - Quantidade de estágios base: ${finalEvolutions}
-        - Mega Evolução inclusa: ${isMega ? "Sim" : "Não"}
-        - Variante Brilhante (Shiny) inclusa: ${isShiny ? "Sim" : "Não"}
-        - Característica Especial: ${finalCharacteristic}
+        - Característica Especial: ${finalCharacteristic === "none" ? "Nenhuma (Linha evolutiva padrão)" : finalCharacteristic}
+        
+        CONFIGURAÇÃO DE ESTRUTURA:
+        - Estágios por linha: ${finalEvolutions}
+        ${evolutionBranches > 1 ? `- Ramificações (branches): ${evolutionBranches} (${branchDescription || "Lógica criativa"})` : "- Ramificações: Nenhuma (Sequência linear)"}
+        ${isRegional && regionalFormsCount > 1 ? `- Formas Regionais: ${regionalFormsCount} (${regionalFormsDescription || "Temas regionais criativos"})` : "- Formas Regionais: Nenhuma"}
+        - Mega Evolução: ${isMega ? "Sim" : "Não"}
+        - Variante Brilhante (Shiny): ${isShiny ? "Sim" : "Não"}
 
-        Você deve gerar exatamente ${totalStages} Fakemon na linha evolutiva.
-        ${isMega ? `O ÚLTIMO estágio (estágio ${totalStages}) DEVE ser a Mega Evolução do estágio anterior. O nome deve ser "Mega [Nome do Fakemon]".` : ""}
+        REGRAS OBRIGATÓRIAS:
+        ${evolutionBranches > 1 ? `1. Como há ${evolutionBranches} ramificações, você DEVE gerar o estágio base e depois as evoluções distintas para cada ramificação conforme a descrição.` : "1. Como NÃO há ramificações, a evolução deve ser estritamente linear (Estágio 1 -> Estágio 2 -> Estágio 3)."}
+        2. O campo "evolutionLine" deve descrever a progressão da linha.
+        3. O campo "stages" deve conter TODOS os Fakemons gerados.
+        ${isMega ? `4. O último estágio DEVE ser a Mega Evolução. O nome deve ser 'Mega [Nome]'.` : ""}
+        ${isRegional && regionalFormsCount > 1 ? `5. Como a característica é Forma Regional (${regionalFormsCount} formas), gere a forma base original e em seguida gere as versões regionais alternativas para a mesma espécie.` : "5. NÃO gere formas regionais se a característica especial não for 'regional'."}
+        6. Se a característica especial for 'corrupted', o design e a lore devem refletir uma influência sombria, digital ou mutante negativa.
         
         Siga rigorosamente este formato JSON:
         {
@@ -964,7 +1011,7 @@ export default function App() {
       `;
 
       const textResponse = await withRetry(() => ai.models.generateContent({
-        model: "gemini-3.1-pro-preview",
+        model: "gemini-3-flash-preview",
         contents: [{ parts: [{ text: textPrompt }] }],
         config: {
           responseMimeType: "application/json",
@@ -1104,6 +1151,8 @@ export default function App() {
       console.error(err);
       if (err?.message?.includes("429") || err?.status === "RESOURCE_EXHAUSTED" || (err?.code === 429)) {
         setError("Limite de uso da IA atingido. Por favor, aguarde um momento antes de tentar novamente.");
+      } else if (err?.message?.includes("403") || err?.status === "PERMISSION_DENIED" || (err?.code === 403)) {
+        setError("Erro de permissão da IA (403). Por favor, verifique se seu projeto tem acesso aos modelos selecionados ou tente novamente em alguns instantes.");
       } else {
         setError("Ocorreu um erro ao forjar seu Fakemon. Tente novamente.");
       }
@@ -1227,7 +1276,7 @@ export default function App() {
                   </select>
                 </div>
                 <div className="space-y-2">
-                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Evoluções</label>
+                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Evoluções (Estágios)</label>
                   <div className="flex border-2 border-black overflow-hidden">
                     {[0, 1, 2, 3].map(num => (
                       <button
@@ -1240,6 +1289,34 @@ export default function App() {
                       </button>
                     ))}
                   </div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60">Ramificações (Branches)</label>
+                  <select 
+                    className="w-full bg-[#F0F0F0] border-2 border-black p-3 font-bold appearance-none focus:outline-none focus:ring-4 focus:ring-[#00FF00]"
+                    value={evolutionBranches}
+                    onChange={(e) => setEvolutionBranches(Number(e.target.value))}
+                  >
+                    {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => (
+                      <option key={num} value={num}>{num === 1 ? "1 (Padrão)" : `${num} Ramificações`}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 flex items-center gap-2">
+                    Lógica de Ramificação
+                  </label>
+                  <input
+                    type="text"
+                    disabled={evolutionBranches <= 1}
+                    placeholder={evolutionBranches <= 1 ? "Ative ramificações primeiro" : "Ex: Por gênero, por item, tipo Eevee..."}
+                    className="w-full bg-[#F0F0F0] border-2 border-black p-3 font-bold focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all disabled:opacity-30"
+                    value={branchDescription}
+                    onChange={(e) => setBranchDescription(e.target.value)}
+                  />
                 </div>
               </div>
 
@@ -1282,6 +1359,35 @@ export default function App() {
                   ))}
                 </div>
               </div>
+
+              {characteristic === 'regional' && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 text-purple-600">Qtd. de Formas Regionais</label>
+                    <select 
+                      className="w-full bg-[#F0F0F0] border-2 border-purple-200 p-3 font-bold appearance-none focus:outline-none focus:ring-4 focus:ring-purple-400"
+                      value={regionalFormsCount}
+                      onChange={(e) => setRegionalFormsCount(Number(e.target.value))}
+                    >
+                      {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => (
+                        <option key={num} value={num}>{num === 1 ? "1 (Padrão)" : `${num} Formas Regionais`}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 text-purple-600 flex items-center gap-2">
+                      Regiões / Temas
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex: Alola, Galar, Deserto, Vulcão..."
+                      className="w-full bg-[#F0F0F0] border-2 border-purple-200 p-3 font-bold focus:outline-none focus:ring-4 focus:ring-purple-400 transition-all"
+                      value={regionalFormsDescription}
+                      onChange={(e) => setRegionalFormsDescription(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
 
               <button
                 onClick={generateFakemon}
@@ -1415,12 +1521,12 @@ export default function App() {
 
                               {/* Info Display */}
                               <div className="space-y-6">
-                                <div className="flex flex-wrap items-end justify-between gap-4 border-b-2 pb-4" style={{ borderColor: rarityStyle.accent }}>
-                                  <div className="space-y-1">
+                                <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 pb-4" style={{ borderColor: rarityStyle.accent }}>
+                                  <div className="space-y-1 flex-1 min-w-[200px]">
                                     <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50">REGISTRO #{String(stage.pokedexNumber || index + 1).padStart(3, '0')}</p>
-                                    <h3 className="text-4xl md:text-5xl font-black uppercase tracking-tighter italic leading-none" style={{ color: rarityStyle.text }}>{stage.name}</h3>
+                                    <h3 className="text-4xl md:text-5xl font-black uppercase tracking-tighter italic leading-none break-words" style={{ color: rarityStyle.text }}>{stage.name}</h3>
                                   </div>
-                                  <div className="flex gap-2">
+                                  <div className="flex gap-2 flex-nowrap shrink-0">
                                     {stage.typing.split('/').map(t => (
                                       <span 
                                         key={t} 
@@ -1617,22 +1723,22 @@ export default function App() {
                       </div>
                       
                       <div className="p-6 space-y-4">
-                        <div className="flex justify-between items-start gap-4">
-                          <div>
-                            <h3 className="text-2xl font-black uppercase tracking-tighter italic leading-none mb-1" style={{ color: rarityStyle.text }}>{fakemon.name}</h3>
-                            <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest">{fakemon.classification}</p>
+                        <div className="flex flex-col gap-3">
+                          <div className="flex justify-between items-start gap-2">
+                            <h3 className="text-2xl font-black uppercase tracking-tighter italic leading-none truncate" style={{ color: rarityStyle.text }} title={fakemon.name}>{fakemon.name}</h3>
+                            <div className="flex gap-1 shrink-0">
+                              {fakemon.typing.split('/').map(t => (
+                                <div 
+                                  key={t} 
+                                  className="px-1.5 py-0.5 text-[7px] font-black uppercase text-white border border-black shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]"
+                                  style={{ backgroundColor: getTypeColor(t) }}
+                                >
+                                  {t.trim()}
+                                </div>
+                              ))}
+                            </div>
                           </div>
-                          <div className="flex flex-wrap gap-2">
-                            {fakemon.typing.split('/').map(t => (
-                              <div 
-                                key={t} 
-                                className="px-2 py-0.5 text-[8px] font-black uppercase text-white border border-black shadow-[1px_1px_0px_0px_rgba(0,0,0,1)]"
-                                style={{ backgroundColor: getTypeColor(t) }}
-                              >
-                                {t.trim()}
-                              </div>
-                            ))}
-                          </div>
+                          <p className="text-[9px] font-bold opacity-50 uppercase tracking-widest border-t border-black/5 pt-2">{fakemon.classification}</p>
                         </div>
 
                     <div className="grid grid-cols-3 gap-2">
