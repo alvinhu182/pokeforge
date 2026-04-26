@@ -622,7 +622,7 @@ export default function App() {
   };
 
   const handleGenerateAnimation = async (fakemon: SavedFakemon) => {
-    setGeneratingVideoId(fakemon.id);
+    setGeneratingVideoId(fakemon.id || fakemon.name);
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
     
     try {
@@ -653,7 +653,7 @@ export default function App() {
         ` }] }],
       }));
 
-      const narrativeScript = scriptResponse.text || `${fakemon.name}. ${fakemon.classification}. ${fakemon.lore}`;
+      const narrativeScript = (scriptResponse.text || `${fakemon.name}. ${fakemon.classification}. ${fakemon.lore}`).trim().replace(/\n/g, ' ');
 
       // 2. Generate TTS Narration
       const ttsResponse = await withRetry(() => ai.models.generateContent({
@@ -696,8 +696,12 @@ export default function App() {
       ttsSource.buffer = audioBuffer;
 
       const destination = audioCtx.createMediaStreamDestination();
+      const silentGain = audioCtx.createGain();
+      silentGain.gain.value = 0; // Silent but keeps pipeline active
+      
       ttsSource.connect(destination);
-      // Removed ttsSource.connect(audioCtx.destination) to prevent browser playback
+      ttsSource.connect(silentGain);
+      silentGain.connect(audioCtx.destination);
 
       // 3. Setup Canvas
       const canvas = document.createElement('canvas');
@@ -762,15 +766,18 @@ export default function App() {
         const blob = new Blob(chunks, { type: mimeType });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
+        a.style.display = 'none';
         a.href = url;
         a.download = `fakemon-${fakemon.name.toLowerCase()}.${extension}`;
+        document.body.appendChild(a);
         a.click();
         
         setTimeout(() => {
+          document.body.removeChild(a);
           URL.revokeObjectURL(url);
           setGeneratingVideoId(null);
           audioCtx.close().catch(() => {});
-        }, 100);
+        }, 500);
       };
 
       // Animation Loop logic
@@ -843,9 +850,9 @@ export default function App() {
         ctx.font = '700 30px Inter';
         ctx.fillText(fakemon.classification.toUpperCase(), canvas.width / 2, 230);
 
-        // Lore
+        // Subtitles (Previously Lore, now matches Narration)
         ctx.font = '400 36px Inter';
-        const words = fakemon.lore.split(' ');
+        const words = narrativeScript.split(' ');
         const lines = [];
         let currentLine = '';
         for(let n = 0; n < words.length; n++) {
@@ -979,24 +986,26 @@ export default function App() {
         - Variante Brilhante (Shiny): ${isShiny ? "Sim" : "Não"}
 
         REGRAS OBRIGATÓRIAS:
-        ${evolutionBranches > 1 ? `1. Como há ${evolutionBranches} ramificações, você DEVE gerar o estágio base e depois as evoluções distintas para cada ramificação conforme a descrição.` : "1. Como NÃO há ramificações, a evolução deve ser estritamente linear (Estágio 1 -> Estágio 2 -> Estágio 3)."}
+        ${evolutionBranches > 1 ? `1. Como há ${evolutionBranches} ramificações, você DEVE gerar o estágio base e depois as evoluções distintas para cada ramificação conforme a descrição.` : `1. Como NÃO há ramificações, a evolução deve ser estritamente linear com EXATAMENTE ${finalEvolutions} estágio(s).`}
         2. O campo "evolutionLine" deve descrever a progressão da linha.
         3. O campo "stages" deve conter TODOS os Fakemons gerados.
         ${isMega ? `4. O último estágio DEVE ser a Mega Evolução. O nome deve ser 'Mega [Nome]'.` : ""}
         ${isRegional && regionalFormsCount > 1 ? `5. Como a característica é Forma Regional (${regionalFormsCount} formas), gere a forma base original e em seguida gere as versões regionais alternativas para a mesma espécie.` : "5. NÃO gere formas regionais se a característica especial não for 'regional'."}
         6. Se a característica especial for 'corrupted', o design e a lore devem refletir uma influência sombria, digital ou mutante negativa.
-        
+        7. CONEXÃO E EVOLUÇÃO: Nas descrições de "lore", explique EXPLICITAMENTE o método de evolução (ex: nível, item, amizade, clima, local). Mantenha uma narrativa coesa entre os estágios, descrevendo como as habilidades e biologia do estágio anterior se transformaram no atual.
+        8. REGRA SHINY: A versão Shiny (Brilhante) DEVE manter a mesma silhueta, forma, pose e anatomia da versão original. A única mudança permitida é a paleta de cores. Sempre priorize cores vibrantes, metálicas, luminescentes ou saturadas que tragam um aspecto "precioso" ou de "brilho raro" (ex: trocar azul fosco por ciano neon ou dourado metálico).
+
         Siga rigorosamente este formato JSON:
         {
-          "evolutionLine": "Descrição geral da linha evolutiva",
+          "evolutionLine": "Descrição geral da linha evolutiva, destacando o tema central e o processo de crescimento.",
           "stages": [
             {
               "name": "Nome do Fakemon",
               "classification": "Fakemon [Tipo de Criatura]",
               "typing": "Tipos",
-              "lore": "Descrição detalhada (2-3 parágrafos) sobre comportamento, habitat e biologia.",
+              "lore": "Lore detalhada. Inclua o comportamento e como ele SE CONECTA ao estágio anterior ou evolui para o próximo. Se for uma evolução, cite como a mudança ocorreu (método de evolução).",
               "imagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão NORMAL (estilo Ken Sugimori, ISOLADO EM FUNDO BRANCO PURO, detalhes nítidos, iluminação 3D moderna).",
-              "shinyImagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão BRILHANTE (SHINY). Descreva cores alternativas raras e contrastantes que fujam do padrão normal, mantendo o estilo visual, ISOLADO EM FUNDO BRANCO PURO.",
+              "shinyImagePrompt": "Prompt técnico e detalhado para a versão SHINY. O PROMPT DEVE SER IDENTICO AO DA VERSÃO NORMAL, mas alterando exclusivamente as cores descritas para tons mais vibrantes, brilhantes, metálicos ou exóticos, garantindo que o design e a silhueta permaneçam intocados.",
               "stats": {
                 "hp": number,
                 "attack": number,
@@ -1521,9 +1530,23 @@ export default function App() {
 
                               {/* Info Display */}
                               <div className="space-y-6">
-                                <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 pb-4" style={{ borderColor: rarityStyle.accent }}>
+                                 <div className="flex flex-wrap items-start justify-between gap-4 border-b-2 pb-4" style={{ borderColor: rarityStyle.accent }}>
                                   <div className="space-y-1 flex-1 min-w-[200px]">
-                                    <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50">REGISTRO #{String(stage.pokedexNumber || index + 1).padStart(3, '0')}</p>
+                                    <div className="flex items-center gap-3">
+                                      <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50">REGISTRO #{String(stage.pokedexNumber || index + 1).padStart(3, '0')}</p>
+                                      <button 
+                                        onClick={() => handleGenerateAnimation({ 
+                                          ...stage, 
+                                          rarity: category === "Aleatório" ? "Comum" : category,
+                                          isMega: isStageMega,
+                                          isShiny: false 
+                                        } as SavedFakemon)}
+                                        disabled={generatingVideoId === (stage as any).id || generatingVideoId === stage.name}
+                                        className="bg-purple-600 text-white p-1.5 rounded hover:bg-purple-700 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-[9px] font-black uppercase px-3 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                                      >
+                                        <Video size={10} /> Gerar Showcase
+                                      </button>
+                                    </div>
                                     <h3 className="text-4xl md:text-5xl font-black uppercase tracking-tighter italic leading-none break-words" style={{ color: rarityStyle.text }}>{stage.name}</h3>
                                   </div>
                                   <div className="flex gap-2 flex-nowrap shrink-0">
@@ -1607,7 +1630,22 @@ export default function App() {
                                 <div className="space-y-6">
                                   <div className="flex flex-wrap items-end justify-between gap-4 border-b-2 border-black pb-4">
                                     <div className="space-y-1">
-                                      <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50 text-yellow-600">REGISTRO RARO #{String(stage.pokedexNumber || index + 1).padStart(3, '0')}</p>
+                                      <div className="flex items-center gap-3">
+                                        <p className="text-[10px] font-black uppercase tracking-[0.3em] opacity-50 text-yellow-600">REGISTRO RARO #{String(stage.pokedexNumber || index + 1).padStart(3, '0')}</p>
+                                        <button 
+                                          onClick={() => handleGenerateAnimation({ 
+                                            ...stage, 
+                                            imageUrl: stage.shinyImageUrl, 
+                                            isShiny: true, 
+                                            rarity: category === "Aleatório" ? "Comum" : category,
+                                            isMega: isStageMega
+                                          } as SavedFakemon)}
+                                          disabled={generatingVideoId === (stage as any).id || generatingVideoId === stage.name}
+                                          className="bg-yellow-400 text-black p-1.5 rounded hover:bg-yellow-500 transition-colors disabled:opacity-50 flex items-center gap-1.5 text-[9px] font-black uppercase px-3 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]"
+                                        >
+                                          <Video size={10} /> Gerar Showcase
+                                        </button>
+                                      </div>
                                       <h3 className="text-4xl md:text-5xl font-black uppercase tracking-tighter italic leading-none">{stage.name} <span className="text-yellow-500">★</span></h3>
                                     </div>
                                     <div className="flex gap-2">
@@ -1855,6 +1893,67 @@ export default function App() {
             )}
           </section>
         )}
+
+        {/* Video Generation Overlay */}
+        <AnimatePresence>
+          {generatingVideoId && (
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/95 backdrop-blur-xl"
+            >
+              <div className="max-w-md w-full text-center space-y-8">
+                <div className="relative inline-block">
+                  <motion.div
+                    animate={{ rotate: 360 }}
+                    transition={{ duration: 4, repeat: Infinity, ease: "linear" }}
+                    className="w-32 h-32 border-4 border-dashed border-purple-500 rounded-full"
+                  />
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Video className="w-12 h-12 text-purple-500 animate-pulse" />
+                  </div>
+                </div>
+                
+                <div className="space-y-4">
+                  <motion.h2 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    className="text-3xl font-black uppercase italic text-white tracking-tighter"
+                  >
+                    Gravando Showcase
+                  </motion.h2>
+                  <motion.p 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.2 }}
+                    className="text-purple-400 font-bold uppercase text-[10px] tracking-[0.3em]"
+                  >
+                    Sincronizando áudio e animação 3D...
+                  </motion.p>
+                </div>
+
+                <div className="flex gap-2 justify-center">
+                  {[0, 1, 2].map((i) => (
+                    <motion.div
+                      key={i}
+                      animate={{ scaleY: [1, 2, 1], opacity: [0.3, 1, 0.3] }}
+                      transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.15 }}
+                      className="w-1.5 h-8 bg-purple-500 rounded-full"
+                    />
+                  ))}
+                </div>
+
+                <div className="bg-white/5 border border-white/10 p-4 font-mono text-[8px] text-gray-400 text-left rounded">
+                  <p>&gt; INITIALIZING_MEDIA_RECORDER...</p>
+                  <p>&gt; BUFFERING_VOICE_SYNTHESIS_MODELS...</p>
+                  <p>&gt; RENDERING_PARTICLE_SYSTEMS_ON_CANVAS...</p>
+                  <p>&gt; CAPTURING_STREAM_AT_30FPS...</p>
+                </div>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         {/* Randomization Overlay */}
         <AnimatePresence>
