@@ -20,7 +20,13 @@ const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+
+// AI Initialization Helper
+const getAiInstance = (userKey?: string) => {
+  const apiKey = userKey || process.env.GEMINI_API_KEY;
+  if (!apiKey) throw new Error("API Key não configurada. Por favor, forneça sua chave Gemini.");
+  return new GoogleGenAI({ apiKey });
+};
 
 enum OperationType {
   CREATE = 'create',
@@ -169,8 +175,13 @@ const TYPE_COLORS: Record<string, string> = {
   "Stellar": "#4924A1",
 };
 
+const FORGE_PASSWORD = "@Bl!nk182";
+
 export default function App() {
   const [view, setView] = useState<"forge" | "pokedex">("forge");
+  const [isAuthorized, setIsAuthorized] = useState(false);
+  const [inputPassword, setInputPassword] = useState("");
+  const [customApiKey, setCustomApiKey] = useState("");
   const [user, setUser] = useState<User | null>(null);
   const [concept, setConcept] = useState("");
   const [suggestedBy, setSuggestedBy] = useState("");
@@ -643,9 +654,10 @@ export default function App() {
     
     try {
       const rarityStyle = getRarityStyles(fakemon.rarity);
+      const aiInstance = getAiInstance(customApiKey);
       
       // 1. Generate Narrative Script
-      const scriptResponse = await withRetry(() => ai.models.generateContent({
+      const scriptResponse = await withRetry(() => aiInstance.models.generateContent({
         model: "gemini-3-flash-preview",
         contents: [{ parts: [{ text: `
           Você é o Narrador Oficial da Pokédex Internacional, com uma voz profunda, épica e cheia de autoridade.
@@ -672,7 +684,7 @@ export default function App() {
       const narrativeScript = (scriptResponse.text || `${fakemon.name}. ${fakemon.classification}. ${fakemon.lore}`).trim().replace(/\n/g, ' ');
 
       // 2. Generate TTS Narration
-      const ttsResponse = await withRetry(() => ai.models.generateContent({
+      const ttsResponse = await withRetry(() => aiInstance.models.generateContent({
         model: "gemini-3.1-flash-tts-preview",
         contents: [{ parts: [{ text: `Narre com uma voz épica de Pokédex o seguinte roteiro: ${narrativeScript}` }] }],
         config: {
@@ -1043,7 +1055,8 @@ export default function App() {
         });
       }
 
-      const textResponse = await withRetry(() => ai.models.generateContent({
+      const aiInstance = getAiInstance(customApiKey);
+      const textResponse = await withRetry(() => aiInstance.models.generateContent({
         model: "gemini-3-flash-preview",
         contents,
         config: {
@@ -1099,7 +1112,7 @@ export default function App() {
         const pokedexNumber = isStageMega ? currentPokedexNumber - 1 : currentPokedexNumber++;
 
         // Normal Image
-        const normalImageResponse = await withRetry(() => ai.models.generateContent({
+        const normalImageResponse = await withRetry(() => aiInstance.models.generateContent({
           model: "gemini-2.5-flash-image",
           contents: [{ parts: [{ text: stage.imagePrompt }] }],
           config: { imageConfig: { aspectRatio: "1:1" } },
@@ -1140,7 +1153,7 @@ export default function App() {
         // Shiny Image
         let shinyImageUrl = "";
         if (isShiny && stage.shinyImagePrompt) {
-          const shinyImageResponse = await withRetry(() => ai.models.generateContent({
+          const shinyImageResponse = await withRetry(() => aiInstance.models.generateContent({
             model: "gemini-2.5-flash-image",
             contents: [{ parts: [{ text: stage.shinyImagePrompt }] }],
             config: { imageConfig: { aspectRatio: "1:1" } },
@@ -1269,7 +1282,73 @@ export default function App() {
 
       <main className="min-h-[calc(100vh-100px)]">
         {view === "forge" ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2">
+          !isAuthorized ? (
+            <section className="flex items-center justify-center min-h-[calc(100vh-100px)] p-6 bg-[#F0F0F0]">
+              <motion.div 
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="max-w-md w-full bg-white border-4 border-black p-8 shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] space-y-6"
+              >
+                <div className="text-center space-y-2">
+                  <div className="w-16 h-16 bg-black rounded-full flex items-center justify-center mx-auto mb-4">
+                    <Hammer className="text-[#00FF00] w-8 h-8" />
+                  </div>
+                  <h2 className="text-2xl font-black uppercase italic tracking-tighter">Acesso Restrito à Forja</h2>
+                  <p className="text-[10px] font-bold uppercase opacity-50">Apenas o Criador pode forjar novos Fakemons.</p>
+                </div>
+
+                <div className="space-y-4">
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black uppercase tracking-widest opacity-60">Senha de Acesso</label>
+                    <input 
+                      type="password" 
+                      value={inputPassword}
+                      onChange={(e) => setInputPassword(e.target.value)}
+                      className="w-full bg-[#F0F0F0] border-2 border-black p-3 font-bold focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all"
+                      placeholder="••••••••"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-black uppercase tracking-widest opacity-60">Gemini API Key (Para Vercel)</label>
+                    <input 
+                      type="password" 
+                      value={customApiKey}
+                      onChange={(e) => setCustomApiKey(e.target.value)}
+                      className="w-full bg-[#F0F0F0] border-2 border-black p-3 font-bold focus:outline-none focus:ring-4 focus:ring-[#00FF00] transition-all"
+                      placeholder="AIzaSy..."
+                    />
+                    <p className="text-[8px] italic opacity-40">Necessário se o site estiver no Vercel e o segredo não estiver configurado.</p>
+                  </div>
+
+                  <button 
+                    onClick={() => {
+                      if (inputPassword === FORGE_PASSWORD) {
+                        setIsAuthorized(true);
+                        setError(null);
+                      } else {
+                        setError("Senha incorreta.");
+                      }
+                    }}
+                    className="w-full bg-black text-[#00FF00] py-4 font-black uppercase text-sm border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] active:shadow-none active:translate-x-1 active:translate-y-1 transition-all"
+                  >
+                    Entrar na Forja
+                  </button>
+
+                  {error === "Senha incorreta." && (
+                    <motion.div 
+                      initial={{ opacity: 0, scale: 0.95 }}
+                      animate={{ opacity: 1, scale: 1 }}
+                      className="p-3 bg-red-100 border-2 border-red-600 text-red-600 font-bold text-[10px] uppercase flex items-center gap-2"
+                    >
+                      <Skull className="w-3 h-3" /> {error}
+                    </motion.div>
+                  )}
+                </div>
+              </motion.div>
+            </section>
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-2">
             {/* Control Panel */}
             <section className="border-r-2 border-black p-6 md:p-10 space-y-8 overflow-y-auto max-h-[calc(100vh-100px)]">
               <div className="space-y-2">
@@ -1756,7 +1835,7 @@ export default function App() {
               </AnimatePresence>
             </section>
           </div>
-        ) : (
+        )) : (
           <section className="p-6 md:p-10 space-y-10 bg-[#F0F0F0] min-h-screen">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6 border-b-4 border-black pb-8">
               <div className="space-y-2">
