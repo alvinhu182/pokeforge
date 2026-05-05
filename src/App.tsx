@@ -262,18 +262,22 @@ export default function App() {
 
   const login = async () => {
     setError(null);
+    console.log("Iniciando login no origin:", window.location.origin);
     try {
-      await signInWithPopup(auth, googleProvider);
+      const result = await signInWithPopup(auth, googleProvider);
+      console.log("Login sucesso:", result.user.email);
     } catch (err: any) {
-      console.error("Login error:", err);
+      console.error("Login error detail:", err);
       if (err.code === 'auth/popup-blocked') {
-        setError("O popup de login foi bloqueado pelo navegador. Por favor, permita popups para este site.");
+        setError("O popup de login foi bloqueado pelo navegador. Por favor, permita popups para este site ou tente em uma aba separada.");
       } else if (err.code === 'auth/unauthorized-domain') {
-        setError("Este domínio não está autorizado no Firebase Console. Adicione o domínio do Vercel nas configurações de Autenticação.");
-      } else if (err.code === 'auth/cancelled-popup-request') {
-        // Ignore user cancellation
+        setError(`Domínio não autorizado: ${window.location.host}. Adicione este domínio no Firebase Console > Authentication > Settings > Authorized Domains.`);
+      } else if (err.code === 'auth/cancelled-popup-request' || err.code === 'auth/popup-closed-by-user') {
+        console.log("Login cancelado pelo usuário.");
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError("O provedor Google não está ativado no Firebase Console. Ative o Google em Authentication > Sign-in method.");
       } else {
-        setError(`Erro de login: ${err.message}`);
+        setError(`Erro de login (${err.code}): ${err.message}`);
       }
     }
   };
@@ -1298,13 +1302,25 @@ export default function App() {
           
           {user ? (
             <div className="flex items-center gap-2 ml-2">
-              <img src={user.photoURL || ""} alt={user.displayName || ""} className="w-8 h-8 rounded-full border-2 border-black" />
-              <button onClick={() => auth.signOut()} className="text-[8px] font-black uppercase opacity-50 hover:opacity-100">Sair</button>
+              <div className="hidden md:flex flex-col items-end">
+                <span className="text-[8px] font-black uppercase opacity-60 leading-none">{user.displayName || "Treinador"}</span>
+                <button onClick={() => auth.signOut()} className="text-[7px] font-bold uppercase hover:text-red-500 transition-colors">Sair (Log Out)</button>
+              </div>
+              <img src={user.photoURL || `https://api.dicebear.com/7.x/avataaars/svg?seed=${user.uid}`} alt={user.displayName || ""} className="w-8 h-8 rounded-full border-2 border-black" />
+              <button onClick={() => auth.signOut()} className="md:hidden text-[8px] font-black uppercase opacity-50">Sair</button>
             </div>
           ) : (
-            <button onClick={login} className="bg-[#00FF00] text-black px-4 py-2 font-black uppercase text-[10px] border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-none transition-all">
-              Login
-            </button>
+            <div className="flex flex-col items-end gap-1">
+              <button 
+                onClick={login} 
+                className="bg-[#00FF00] text-black px-4 py-2 font-black uppercase text-[10px] border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] hover:translate-x-0.5 hover:translate-y-0.5 hover:shadow-none transition-all flex items-center gap-2"
+              >
+                <Zap size={12} fill="currentColor" /> Login com Google
+              </button>
+              {window.location.hostname.includes('vercel.app') && (
+                <span className="text-[7px] font-bold opacity-30 uppercase">Verifique Domínios no Firebase</span>
+              )}
+            </div>
           )}
         </div>
       </header>
