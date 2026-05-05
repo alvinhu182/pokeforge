@@ -5,7 +5,7 @@
 
 import React, { useState, useEffect } from "react";
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle, Download, Video } from "lucide-react";
+import { Sparkles, Loader2, Image as ImageIcon, Info, ChevronRight, Zap, Skull, Globe, Star, BookOpen, Hammer, Search, Trash2, HelpCircle, Download, Video, X } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { motion, AnimatePresence } from "motion/react";
 import { toPng } from "html-to-image";
@@ -198,6 +198,22 @@ export default function App() {
     type2?: string;
     characteristic?: string;
   }>(null);
+  const [referenceImage, setReferenceImage] = useState<string | null>(null);
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 4 * 1024 * 1024) {
+        setError("A imagem deve ter menos de 4MB.");
+        return;
+      }
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setReferenceImage(reader.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
+  };
 
   const getTypeColor = (type: string) => {
     const t = type.trim();
@@ -843,12 +859,6 @@ export default function App() {
         // Text & UI
         ctx.textAlign = 'center';
         ctx.fillStyle = rarityStyle.accent;
-        ctx.font = '900 94px Inter';
-        ctx.fillText(fakemon.name.toUpperCase(), canvas.width / 2, 180);
-
-        ctx.fillStyle = 'white';
-        ctx.font = '700 30px Inter';
-        ctx.fillText(fakemon.classification.toUpperCase(), canvas.width / 2, 230);
 
         // Subtitles (Previously Lore, now matches Narration)
         ctx.font = '400 36px Inter';
@@ -974,6 +984,7 @@ export default function App() {
         Você é um Especialista em Game Design e Artista Conceitual da franquia Fakemon.
         Crie uma linha evolutiva de Fakemon com base nestes parâmetros:
         - Conceito: ${concept || "Um Fakemon criativo, original e visualmente impactante"}
+        ${referenceImage ? "- INSPIRAÇÃO VISUAL: Analise a imagem em anexo. Use suas cores, formas e características anatômicas como base para o design deste Fakemon." : ""}
         - Categoria (Raridade/Poder): ${finalCategory}
         - Tipagem: ${finalType1}${finalType2 !== "Nenhum" ? ` / ${finalType2}` : ""}
         - Característica Especial: ${finalCharacteristic === "none" ? "Nenhuma (Linha evolutiva padrão)" : finalCharacteristic}
@@ -994,6 +1005,7 @@ export default function App() {
         6. Se a característica especial for 'corrupted', o design e a lore devem refletir uma influência sombria, digital ou mutante negativa.
         7. CONEXÃO E EVOLUÇÃO: Nas descrições de "lore", explique EXPLICITAMENTE o método de evolução (ex: nível, item, amizade, clima, local). Mantenha uma narrativa coesa entre os estágios, descrevendo como as habilidades e biologia do estágio anterior se transformaram no atual.
         8. REGRA SHINY: A versão Shiny (Brilhante) DEVE manter a mesma silhueta, forma, pose e anatomia da versão original. A única mudança permitida é a paleta de cores. Sempre priorize cores vibrantes, metálicas, luminescentes ou saturadas que tragam um aspecto "precioso" ou de "brilho raro" (ex: trocar azul fosco por ciano neon ou dourado metálico).
+        9. ESTÉTICA POKÉMON (ESTILO KEN SUGIMORI): Os desenhos devem obrigatoriamente seguir a estética oficial dos jogos Pokémon. Isso inclui: formas anatômicas sólidas e limpas, olhos expressivos mas simples, contornos pretos bem definidos, sombreamento cel-shaded (chapado com poucos níveis de gradiente) e designs que pareçam criaturas biológicas reais, não robôs ou monstros genéricos de fantasia. Evite detalhes excessivamente complexos e texturas foto-realistas.
 
         Siga rigorosamente este formato JSON:
         {
@@ -1004,8 +1016,8 @@ export default function App() {
               "classification": "Fakemon [Tipo de Criatura]",
               "typing": "Tipos",
               "lore": "Lore detalhada. Inclua o comportamento e como ele SE CONECTA ao estágio anterior ou evolui para o próximo. Se for uma evolução, cite como a mudança ocorreu (método de evolução).",
-              "imagePrompt": "Prompt técnico e detalhado para gerador de imagem da versão NORMAL (estilo Ken Sugimori, ISOLADO EM FUNDO BRANCO PURO, detalhes nítidos, iluminação 3D moderna).",
-              "shinyImagePrompt": "Prompt técnico e detalhado para a versão SHINY. O PROMPT DEVE SER IDENTICO AO DA VERSÃO NORMAL, mas alterando exclusivamente as cores descritas para tons mais vibrantes, brilhantes, metálicos ou exóticos, garantindo que o design e a silhueta permaneçam intocados.",
+              "imagePrompt": "Prompt técnico para imagem NORMAL: Estilo artístico oficial de Ken Sugimori (Pokémon), contornos pretos nítidos, sombreamento cel-shaded, ISOLADO EM FUNDO BRANCO PURO, cores sólidas, iluminação simples, pose dinâmica clássica. SEM DETALHES 3D REALISTAS, APENAS 2D DE ALTA QUALIDADE.",
+              "shinyImagePrompt": "Prompt técnico para imagem SHINY: O PROMPT DEVE SER IDENTICO AO DA VERSÃO NORMAL, mas alterando exclusivamente as cores descritas para tons mais vibrantes, brilhantes, metálicos ou exóticos, garantindo que o design e a silhueta permaneçam intocados no estilo Ken Sugimori.",
               "stats": {
                 "hp": number,
                 "attack": number,
@@ -1019,9 +1031,21 @@ export default function App() {
         }
       `;
 
+      const contents: any[] = [{ parts: [{ text: textPrompt }] }];
+      if (referenceImage) {
+        const [meta, data] = referenceImage.split(',');
+        const mimeType = meta.split(':')[1].split(';')[0];
+        contents[0].parts.push({
+          inlineData: {
+            mimeType,
+            data
+          }
+        });
+      }
+
       const textResponse = await withRetry(() => ai.models.generateContent({
         model: "gemini-3-flash-preview",
-        contents: [{ parts: [{ text: textPrompt }] }],
+        contents,
         config: {
           responseMimeType: "application/json",
           responseSchema: {
@@ -1258,6 +1282,51 @@ export default function App() {
                   value={concept}
                   onChange={(e) => setConcept(e.target.value)}
                 />
+              </div>
+
+              <div className="space-y-4">
+                <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 flex items-center gap-2">
+                  <ImageIcon className="w-3 h-3" /> Imagem de Referência (Opcional)
+                </label>
+                
+                <div className="flex gap-4 items-start">
+                  {!referenceImage ? (
+                    <label className="flex-1 cursor-pointer group">
+                      <div className="w-full h-32 bg-[#F0F0F0] border-2 border-dashed border-black flex flex-col items-center justify-center gap-2 hover:bg-[#EAEAEA] transition-all group-hover:border-[#00FF00]">
+                        <ImageIcon className="w-8 h-8 opacity-20 group-hover:opacity-100 group-hover:text-[#00FF00] transition-all" />
+                        <span className="text-[10px] font-black uppercase opacity-40 group-hover:opacity-100">Upload de Imagem</span>
+                      </div>
+                      <input 
+                        type="file" 
+                        accept="image/*" 
+                        className="hidden" 
+                        onChange={handleImageUpload}
+                      />
+                    </label>
+                  ) : (
+                    <div className="relative w-full h-40 bg-[#F0F0F0] border-2 border-black p-2">
+                      <img 
+                        src={referenceImage} 
+                        alt="Referência" 
+                        className="w-full h-full object-contain"
+                      />
+                      <button 
+                        onClick={() => setReferenceImage(null)}
+                        className="absolute -top-3 -right-3 w-8 h-8 bg-black text-white rounded-full flex items-center justify-center hover:bg-red-600 transition-colors shadow-lg"
+                      >
+                        <X size={16} />
+                      </button>
+                    </div>
+                  )}
+                  
+                  {referenceImage && (
+                    <div className="w-1/3 space-y-2 translate-y-2">
+                      <p className="text-[8px] font-black uppercase leading-tight opacity-50 italic">
+                        A IA irá analisar as cores e formas desta imagem para basear o novo Fakemon.
+                      </p>
+                    </div>
+                  )}
+                </div>
               </div>
 
               <div className="space-y-2">
