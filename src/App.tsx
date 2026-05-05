@@ -13,13 +13,14 @@ import { toPng } from "html-to-image";
 // --- Firebase ---
 import { initializeApp } from "firebase/app";
 import { getFirestore, collection, addDoc, onSnapshot, query, orderBy, limit, getDocs, deleteDoc, doc, getDocFromServer, where, writeBatch } from "firebase/firestore";
-import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User } from "firebase/auth";
+import { getAuth, signInWithPopup, GoogleAuthProvider, onAuthStateChanged, User, setPersistence, browserLocalPersistence } from "firebase/auth";
 import firebaseConfig from "../firebase-applet-config.json";
 
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 const auth = getAuth(app);
 const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
 
 // AI Initialization Helper
 const getAiInstance = (userKey?: string) => {
@@ -182,6 +183,20 @@ export default function App() {
   const [isAuthorized, setIsAuthorized] = useState(false);
   const [inputPassword, setInputPassword] = useState("");
   const [customApiKey, setCustomApiKey] = useState("");
+
+  // --- Persistence ---
+  useEffect(() => {
+    const savedAuth = localStorage.getItem("forge_authorized");
+    const savedKey = localStorage.getItem("forge_api_key");
+    if (savedAuth === "true") setIsAuthorized(true);
+    if (savedKey) setCustomApiKey(savedKey);
+  }, []);
+
+  useEffect(() => {
+    if (customApiKey) {
+      localStorage.setItem("forge_api_key", customApiKey);
+    }
+  }, [customApiKey]);
   const [user, setUser] = useState<User | null>(null);
   const [concept, setConcept] = useState("");
   const [suggestedBy, setSuggestedBy] = useState("");
@@ -235,17 +250,31 @@ export default function App() {
 
   // --- Firebase Auth ---
   useEffect(() => {
+    // Ensure persistence
+    setPersistence(auth, browserLocalPersistence).catch(err => console.error("Persistence error:", err));
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
+      console.log("Auth state changed:", currentUser?.email);
       setUser(currentUser);
     });
     return () => unsubscribe();
   }, []);
 
   const login = async () => {
+    setError(null);
     try {
       await signInWithPopup(auth, googleProvider);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Login error:", err);
+      if (err.code === 'auth/popup-blocked') {
+        setError("O popup de login foi bloqueado pelo navegador. Por favor, permita popups para este site.");
+      } else if (err.code === 'auth/unauthorized-domain') {
+        setError("Este domínio não está autorizado no Firebase Console. Adicione o domínio do Vercel nas configurações de Autenticação.");
+      } else if (err.code === 'auth/cancelled-popup-request') {
+        // Ignore user cancellation
+      } else {
+        setError(`Erro de login: ${err.message}`);
+      }
     }
   };
 
@@ -1280,6 +1309,20 @@ export default function App() {
         </div>
       </header>
 
+      {error && !isAuthorized && view === "forge" && (
+        <div className="bg-red-600 text-white p-2 text-center text-[10px] font-black uppercase flex items-center justify-center gap-2 border-b-2 border-black">
+          <Skull className="w-3 h-3" /> {error}
+          <button onClick={() => setError(null)} className="ml-4 opacity-50 hover:opacity-100"><X className="w-3 h-3" /></button>
+        </div>
+      )}
+
+      {error && view === "pokedex" && (
+        <div className="bg-red-600 text-white p-2 text-center text-[10px] font-black uppercase flex items-center justify-center gap-2 border-b-2 border-black">
+          <Skull className="w-3 h-3" /> {error}
+          <button onClick={() => setError(null)} className="ml-4 opacity-50 hover:opacity-100"><X className="w-3 h-3" /></button>
+        </div>
+      )}
+
       <main className="min-h-[calc(100vh-100px)]">
         {view === "forge" ? (
           !isAuthorized ? (
@@ -1325,6 +1368,7 @@ export default function App() {
                     onClick={() => {
                       if (inputPassword === FORGE_PASSWORD) {
                         setIsAuthorized(true);
+                        localStorage.setItem("forge_authorized", "true");
                         setError(null);
                       } else {
                         setError("Senha incorreta.");
@@ -1335,7 +1379,7 @@ export default function App() {
                     Entrar na Forja
                   </button>
 
-                  {error === "Senha incorreta." && (
+                  {error && (
                     <motion.div 
                       initial={{ opacity: 0, scale: 0.95 }}
                       animate={{ opacity: 1, scale: 1 }}
@@ -1351,6 +1395,29 @@ export default function App() {
             <div className="grid grid-cols-1 lg:grid-cols-2">
             {/* Control Panel */}
             <section className="border-r-2 border-black p-6 md:p-10 space-y-8 overflow-y-auto max-h-[calc(100vh-100px)]">
+              <div className="flex justify-between items-center bg-[#00FF00] p-4 border-2 border-black mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-8 h-8 bg-black rounded-full flex items-center justify-center">
+                    <Hammer className="text-[#00FF00] w-4 h-4" />
+                  </div>
+                  <div>
+                    <h3 className="text-[10px] font-black uppercase leading-none">Forja Ativa</h3>
+                    <p className="text-[8px] font-bold uppercase opacity-60">Sessão Autorizada</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => {
+                    localStorage.removeItem("forge_authorized");
+                    localStorage.removeItem("forge_api_key");
+                    setIsAuthorized(false);
+                    setCustomApiKey("");
+                  }}
+                  className="bg-black text-white px-3 py-1 text-[8px] font-black uppercase hover:bg-red-600 transition-colors"
+                >
+                  Sair da Forja
+                </button>
+              </div>
+
               <div className="space-y-2">
                 <label className="text-[10px] font-bold uppercase tracking-[0.2em] opacity-60 flex items-center gap-2">
                   <Info className="w-3 h-3" /> Conceito Base
